@@ -3,6 +3,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use iroh::{
     bytes::Hash,
+    client::Doc,
     node::FsNode,
     sync::{store::Query, Author, NamespaceId},
 };
@@ -12,6 +13,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::{
     error::Error,
+    ops::Deref,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -20,14 +22,26 @@ fn normalise_path(path: PathBuf) -> PathBuf {
     PathBuf::from("/").join(path).clean()
 }
 
+/// Configuration for an Oku file system.
+pub struct OkuFsConfig {
+    /// The path of the file on disk holding the Iroh node's data.
+    pub node_path: PathBuf,
+    /// The path of the file on disk holding the author's credentials.
+    pub author_path: PathBuf,
+    /// The path of the file on disk holding the root directory.
+    pub root_path: PathBuf,
+}
+
 /// An instance of an Oku file system.
 pub struct OkuFs {
     /// The Iroh node responsible for managing the file system.
     node: FsNode,
     /// The default author for the file system.
     author: Author,
-    /// The root directory of the file system.
-    root: Arc<Mutex<Directory>>,
+    /// The root directory of the file system. `None` only when the file system is starting.
+    root: Option<Arc<Mutex<Directory>>>,
+    /// The configuration of the file system.
+    config: OkuFsConfig,
 }
 
 /// A file in an Oku file system.
@@ -44,6 +58,8 @@ pub struct File {
 pub struct Directory {
     /// The children of the directory.
     children: Vec<FsEntry>,
+    /// The ID of the Iroh document pointing to the directory's children.
+    id: NamespaceId,
     /// The name of the directory. `None` if the directory is the root directory.
     name: Option<String>,
 }
@@ -93,7 +109,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// The author credentials.
-    pub async fn load_or_create_author(path: PathBuf) -> Result<Author, Box<dyn Error>> {
+    pub fn load_or_create_author(path: PathBuf) -> Result<Author, Box<dyn Error>> {
         let author_file = std::fs::read(path.clone());
         match author_file {
             Ok(bytes) => Ok(Author::from_bytes(&bytes[..32].try_into()?)),
@@ -116,7 +132,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// The root directory.
-    pub fn load_or_create_root(path: PathBuf) -> Result<Directory, Box<dyn Error>> {
+    pub async fn load_or_create_root(&self, path: PathBuf) -> Result<Directory, Box<dyn Error>> {
         let root_file = std::fs::read(path.clone());
         match root_file {
             Ok(bytes) => {
@@ -124,8 +140,19 @@ impl OkuFs {
                 Ok(root)
             }
             Err(_) => {
+                let docs_client = &self.node.docs;
+                let new_document = docs_client.create().await?;
+                // The document's initial entry has the current time as its key.
+                let current_time: DateTime<Utc> = Utc::now();
+                let entry_key_string = current_time.to_rfc3339();
+                let _hash = new_document
+                    .set_bytes(self.author.id(), entry_key_string, "")
+                    .await?;
+                let id = new_document.id();
+                new_document.close().await?;
                 let root = Directory {
                     children: Vec::new(),
+                    id,
                     name: None,
                 };
                 let root_bytes = bincode::serialize(&root)?;
@@ -135,7 +162,7 @@ impl OkuFs {
         }
     }
 
-    /// Opens an existing Oku file system, or creates a new file system if none exists.
+    /// Runs an Oku file system node, creating a new file system if none exists.
     ///
     /// # Arguments
     ///
@@ -148,21 +175,35 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn open_or_create(
-        node_path: PathBuf,
-        author_path: PathBuf,
-        root_path: PathBuf,
-    ) -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
-            node: FsNode::persistent(node_path).await?.spawn().await?,
-            author: Self::load_or_create_author(author_path).await?,
-            root: Arc::new(Mutex::new(Self::load_or_create_root(root_path)?)),
-        })
+    pub async fn start(config: OkuFsConfig) -> Result<Self, Box<dyn Error>> {
+        let root_path = config.root_path.clone();
+        let mut node = Self {
+            node: FsNode::persistent(config.node_path.clone())
+                .await?
+                .spawn()
+                .await?,
+            author: Self::load_or_create_author(config.author_path.clone())?,
+            root: None,
+            config,
+        };
+        node.root = Some(Arc::new(Mutex::new(
+            node.load_or_create_root(root_path).await?,
+        )));
+        Ok(node)
     }
 
-    /// Shuts down the file system.
-    pub async fn shutdown(self) {
+    /// Shuts down the file system node.
+    pub fn shutdown(self) {
         self.node.shutdown();
+    }
+
+    /// Obtains the root directory of the file system.
+    ///
+    /// # Returns
+    ///
+    /// The root directory.
+    pub fn get_root(&self) -> Result<Arc<Mutex<Directory>>, Box<dyn Error>> {
+        self.root.clone().ok_or(Box::new(OkuFsError::RootNotLoaded))
     }
 
     /// Obtains a file system entry given its path.
@@ -176,7 +217,7 @@ impl OkuFs {
     /// The file system entry.
     pub fn get_entry(&self, path: PathBuf) -> Result<FsEntry, Box<dyn Error>> {
         let path = normalise_path(path);
-        let mut current: FsEntry = FsEntry::Directory(self.root.clone());
+        let mut current: FsEntry = FsEntry::Directory(self.get_root()?);
         let mut traversed_path = PathBuf::new();
         for component in path.components() {
             if current.is_dir() {
@@ -232,7 +273,14 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `path` - The path of the directory to create.
-    pub fn create_directory(&self, path: PathBuf) -> Result<Arc<Mutex<Directory>>, Box<dyn Error>> {
+    ///
+    /// # Returns
+    ///
+    /// The new directory, its ID, and its hash.
+    pub async fn create_directory(
+        &self,
+        path: PathBuf,
+    ) -> Result<(Arc<Mutex<Directory>>, NamespaceId, Hash), Box<dyn Error>> {
         let path = normalise_path(path);
         let parent = self.get_parent_directory(path.clone())?;
         let name = path
@@ -246,8 +294,20 @@ impl OkuFs {
         if already_exists {
             return Err(Box::new(OkuFsError::DirectoryAlreadyExists));
         }
+        let docs_client = &self.node.docs;
+        let new_document = docs_client.create().await?;
+        // The document's initial entry has the current time as its key.
+        let current_time: DateTime<Utc> = Utc::now();
+        let entry_key_string = current_time.to_rfc3339();
+        // Initially, the directory has no children.
+        let hash = new_document
+            .set_bytes(self.author.id(), entry_key_string, "")
+            .await?;
+        let id = new_document.id();
+        new_document.close().await?;
         let new_directory = Directory {
             children: Vec::new(),
+            id,
             name: Some(name),
         };
         let new_directory = Arc::new(Mutex::new(new_directory));
@@ -256,7 +316,8 @@ impl OkuFs {
             .unwrap()
             .children
             .push(FsEntry::Directory(new_directory.clone()));
-        Ok(new_directory)
+        self.save_fs_mappings()?;
+        Ok((new_directory, id, hash))
     }
 
     /// Renames a directory in the file system.
@@ -271,6 +332,7 @@ impl OkuFs {
         let entry = self.get_entry(path.clone())?;
         let directory = entry.as_dir()?;
         directory.lock().unwrap().name = Some(new_name);
+        self.save_fs_mappings()?;
         Ok(())
     }
 
@@ -286,7 +348,55 @@ impl OkuFs {
         let entry = self.get_entry(path.clone())?;
         let file = entry.as_file()?;
         file.lock().unwrap().name = new_name;
+        self.save_fs_mappings()?;
         Ok(())
+    }
+
+    /// Synchronises a directory document with the current state of the directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - The directory.
+    ///
+    /// * `directory_document` - The document, representing the directory, that needs syncing.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the directory document's new state.
+    pub async fn sync_directory_document<
+        C: quic_rpc::transport::Connection<
+            iroh::rpc_protocol::ProviderResponse,
+            iroh::rpc_protocol::ProviderRequest,
+        >,
+    >(
+        &self,
+        directory: Arc<Mutex<Directory>>,
+        directory_document: Option<Doc<C>>,
+    ) -> Result<Hash, Box<dyn Error>> {
+        match directory_document {
+            None => return Err(Box::new(OkuFsError::FsEntryNotFound)),
+            Some(document) => {
+                // The current state of the document is given the current time as its key.
+                let current_time: DateTime<Utc> = Utc::now();
+                let entry_key_string = current_time.to_rfc3339();
+                let children_ids = directory
+                    .lock()
+                    .unwrap()
+                    .children
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        FsEntry::File(f) => Some(f.lock().unwrap().id),
+                        FsEntry::Directory(d) => Some(d.lock().unwrap().id),
+                    })
+                    .collect::<Vec<NamespaceId>>();
+                let serialised_children_ids = bincode::serialize(&children_ids)?;
+                let hash = document
+                    .set_bytes(self.author.id(), entry_key_string, serialised_children_ids)
+                    .await?;
+                document.close().await?;
+                Ok(hash)
+            }
+        }
     }
 
     /// Moves a file from one location to another in the file system.
@@ -296,7 +406,15 @@ impl OkuFs {
     /// * `path` - The path of the file to move.
     ///
     /// * `new_path` - The new path of the file.
-    pub fn move_file(&self, path: PathBuf, new_path: PathBuf) -> Result<(), Box<dyn Error>> {
+    ///
+    /// # Returns
+    ///
+    /// The hashes of the old and new parent directories after the move.
+    pub async fn move_file(
+        &self,
+        path: PathBuf,
+        new_path: PathBuf,
+    ) -> Result<(Hash, Hash), Box<dyn Error>> {
         let path = normalise_path(path);
         let new_path = normalise_path(new_path);
         let entry = self.get_entry(path.clone())?;
@@ -323,7 +441,17 @@ impl OkuFs {
             .unwrap()
             .children
             .push(FsEntry::File(file.clone()));
-        Ok(())
+        let docs_client = &self.node.docs;
+        let old_parent_document = docs_client.open(old_parent.lock().unwrap().id).await?;
+        let old_parent_hash = self
+            .sync_directory_document(old_parent, old_parent_document)
+            .await?;
+        let new_parent_document = docs_client.open(new_parent.lock().unwrap().id).await?;
+        let new_parent_hash = self
+            .sync_directory_document(new_parent, new_parent_document)
+            .await?;
+        self.save_fs_mappings()?;
+        Ok((old_parent_hash, new_parent_hash))
     }
 
     /// Moves a directory from one location to another in the file system.
@@ -333,7 +461,15 @@ impl OkuFs {
     /// * `path` - The path of the directory to move.
     ///
     /// * `new_path` - The new path of the directory.
-    pub fn move_directory(&self, path: PathBuf, new_path: PathBuf) -> Result<(), Box<dyn Error>> {
+    ///
+    /// # Returns
+    ///
+    /// The hashes of the old and new parent directories after the move.
+    pub async fn move_directory(
+        &self,
+        path: PathBuf,
+        new_path: PathBuf,
+    ) -> Result<(Hash, Hash), Box<dyn Error>> {
         let path = normalise_path(path);
         let new_path = normalise_path(new_path);
         let entry = self.get_entry(path.clone())?;
@@ -361,7 +497,17 @@ impl OkuFs {
             .unwrap()
             .children
             .push(FsEntry::Directory(directory.clone()));
-        Ok(())
+        let docs_client = &self.node.docs;
+        let old_parent_document = docs_client.open(old_parent.lock().unwrap().id).await?;
+        let old_parent_hash = self
+            .sync_directory_document(old_parent, old_parent_document)
+            .await?;
+        let new_parent_document = docs_client.open(new_parent.lock().unwrap().id).await?;
+        let new_parent_hash = self
+            .sync_directory_document(new_parent, new_parent_document)
+            .await?;
+        self.save_fs_mappings()?;
+        Ok((old_parent_hash, new_parent_hash))
     }
 
     /// Creates a new file in the file system.
@@ -374,12 +520,12 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// The ID and hash of the new document.
+    /// The new file, its ID, its hash, and the hash of its parent directory.
     pub async fn create_file(
         &self,
         path: PathBuf,
         data: impl Into<Bytes>,
-    ) -> Result<(NamespaceId, Hash), Box<dyn Error>> {
+    ) -> Result<(Arc<Mutex<File>>, NamespaceId, Hash, Hash), Box<dyn Error>> {
         // Creates a new Iroh document, making note of the document ID and its path in the file system.
         let path = normalise_path(path);
         let parent = self.get_parent_directory(path.clone())?;
@@ -403,13 +549,18 @@ impl OkuFs {
             .await?;
         let id = new_document.id();
         new_document.close().await?;
-        let new_file = File { id, name: name };
+        let new_file = Arc::new(Mutex::new(File { id, name: name }));
         parent
             .lock()
             .unwrap()
             .children
-            .push(FsEntry::File(Arc::new(Mutex::new(new_file))));
-        Ok((id, hash))
+            .push(FsEntry::File(new_file.clone()));
+        let parent_document = docs_client.open(parent.lock().unwrap().id).await?;
+        let parent_hash = self
+            .sync_directory_document(parent, parent_document)
+            .await?;
+        self.save_fs_mappings()?;
+        Ok((new_file, id, hash, parent_hash))
     }
 
     /// Modifies an existing file in the file system.
@@ -449,6 +600,7 @@ impl OkuFs {
                     .set_bytes(self.author.id(), entry_key_string, data.into())
                     .await?;
                 document.close().await?;
+                self.save_fs_mappings()?;
                 Ok(hash)
             }
         }
@@ -459,21 +611,32 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `path` - The path of the folder to delete.
-    pub fn delete_folder(&self, path: PathBuf) -> Result<(), Box<dyn Error>> {
+    ///
+    /// # Returns
+    ///
+    /// The hash of the directory's parent directory after the deletion.
+    pub async fn remove_folder(&self, path: PathBuf) -> Result<Hash, Box<dyn Error>> {
         let path = normalise_path(path);
-        let entry = self.get_entry(path.clone())?;
         let parent = self.get_parent_directory(path.clone())?;
+        let entry = self.get_entry(path.clone())?;
         let entry = entry.as_dir()?;
         let directory = entry.lock().unwrap();
-        let directory_name = directory.name.clone();
+        let directory_id = directory.id;
         if directory.children.len() > 0 {
             return Err(Box::new(OkuFsError::DirectoryNotEmpty));
         }
         parent.lock().unwrap().children.retain(|child| match child {
-            FsEntry::Directory(d) => d.lock().unwrap().name != directory_name,
+            FsEntry::Directory(d) => d.lock().unwrap().id != directory_id,
             _ => true,
         });
-        Ok(())
+        let docs_client = &self.node.docs;
+        docs_client.drop_doc(directory_id).await?;
+        let parent_document = docs_client.open(parent.lock().unwrap().id).await?;
+        let parent_hash = self
+            .sync_directory_document(parent, parent_document)
+            .await?;
+        self.save_fs_mappings()?;
+        Ok(parent_hash)
     }
 
     /// Deletes a file in the file system.
@@ -484,8 +647,8 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// The number of document entries deleted.
-    pub async fn delete_file(&self, path: PathBuf) -> Result<usize, Box<dyn Error>> {
+    /// The number of document entries deleted and the hash of the file's parent directory after the deletion.
+    pub async fn remove_file(&self, path: PathBuf) -> Result<Hash, Box<dyn Error>> {
         let path = normalise_path(path);
         let entry = self.get_entry(path.clone())?;
         let parent = self.get_parent_directory(path.clone())?;
@@ -496,17 +659,15 @@ impl OkuFs {
             FsEntry::File(f) => f.lock().unwrap().name != file_name,
             _ => true,
         });
-        let file_id = file.id;
         let docs_client = &self.node.docs;
-        let document = docs_client.open(file_id).await?;
-        match document {
-            None => return Err(Box::new(OkuFsError::FsEntryNotFound)),
-            Some(document) => {
-                let entries_deleted = document.del(self.author.id(), "").await?;
-                document.close().await?;
-                Ok(entries_deleted)
-            }
-        }
+        let parent_document = docs_client.open(parent.lock().unwrap().id).await?;
+        let parent_hash = self
+            .sync_directory_document(parent, parent_document)
+            .await?;
+        let file_id = file.id;
+        docs_client.drop_doc(file_id).await?;
+        self.save_fs_mappings()?;
+        Ok(parent_hash)
     }
 
     /// Lists the contents of a directory in the file system.
@@ -574,15 +735,29 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// The ID and hash of the copy.
+    /// The ID and hash of the copy, as well as the hash of its parent directory.
     pub async fn copy_file(
         &self,
         path: PathBuf,
         new_path: PathBuf,
-    ) -> Result<(NamespaceId, Hash), Box<dyn Error>> {
+    ) -> Result<(Arc<Mutex<File>>, NamespaceId, Hash, Hash), Box<dyn Error>> {
         let path = normalise_path(path);
         let new_path = normalise_path(new_path);
         let file_contents = self.read_file(path.clone()).await?;
         self.create_file(new_path.clone(), file_contents).await
+    }
+
+    /// Saves the file system's mapping of paths to file system entries to disk.
+    ///
+    /// This must be done after any changes to the file system's structure to ensure file paths correctly map with Iroh documents.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path on disk to save the file system mappings to.
+    pub fn save_fs_mappings(&self) -> Result<(), Box<dyn Error>> {
+        let root = self.get_root()?;
+        let root_bytes = bincode::serialize(&root.lock().unwrap().deref())?;
+        std::fs::write(self.config.root_path.clone(), &root_bytes)?;
+        Ok(())
     }
 }

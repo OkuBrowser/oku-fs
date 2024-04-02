@@ -13,6 +13,7 @@ chrono = "0.4.37"
 iroh = "0.13.0"
 miette = { version = "7.2.0", features = ["fancy"] }
 path-clean = "1.0.1"
+quic-rpc = "0.7.0"
 rand_core = "0.6.4"
 serde = "1.0.197"
 thiserror = "1.0.58"

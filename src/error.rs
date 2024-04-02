@@ -2,6 +2,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 #[derive(Error, Debug, Diagnostic)]
+/// File system errors.
 pub enum OkuFsError {
     #[error("File system entry not found.")]
     #[diagnostic(
@@ -9,6 +10,7 @@ pub enum OkuFsError {
         url(docsrs),
         help("Please ensure that the file system entry exists before attempting to read it.")
     )]
+    /// File system entry not found.
     FsEntryNotFound,
     #[error("File has no name.")]
     #[diagnostic(
@@ -16,17 +18,26 @@ pub enum OkuFsError {
         url(docsrs),
         help("Please ensure that the file you are trying to create has a name.")
     )]
+    /// File has no name.
     FileNoName,
     #[error("Cannot get lock on file system entry.")]
     #[diagnostic(code(fs::cannot_get_lock), url(docsrs))]
+    /// Cannot get lock on file system entry.
     CannotGetLock,
     #[error("A file already exists at this path.")]
     #[diagnostic(code(fs::file_already_exists), url(docsrs))]
+    /// A file already exists at this path.
     FileAlreadyExists,
     #[error("A directory already exists at this path.")]
     #[diagnostic(code(fs::directory_already_exists), url(docsrs))]
+    /// A directory already exists at this path.
     DirectoryAlreadyExists,
-    #[error("Cannot delete a directory that has children.")]
+    #[error("Cannot remove a directory that has children.")]
     #[diagnostic(code(fs::directory_not_empty), url(docsrs))]
+    /// Cannot remove a directory that has children.
     DirectoryNotEmpty,
+    #[error("File system root has not been loaded.")]
+    #[diagnostic(code(fs::root_not_loaded), url(docsrs))]
+    /// File system root has not been loaded.
+    RootNotLoaded,
 }
