@@ -41,3 +41,10 @@ pub enum OkuFsError {
     /// File system root has not been loaded.
     RootNotLoaded,
 }
+
+#[derive(Error, Debug, Diagnostic)]
+pub enum OkuDiscoveryError {
+    #[error("Invalid hash and format.")]
+    #[diagnostic(code(discovery::invalid_hash_and_format), url(docsrs))]
+    InvalidHashAndFormat,
+}
