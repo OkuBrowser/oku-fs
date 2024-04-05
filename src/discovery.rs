@@ -1,13 +1,14 @@
 use crate::error::OkuDiscoveryError;
-use futures::StreamExt;
+
 use iroh::{
     bytes::{Hash, HashAndFormat},
-    sync::NamespaceId,
+    net::NodeId,
     ticket::BlobTicket,
 };
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
 use iroh_mainline_content_discovery::UdpDiscovery;
+
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{error::Error, str::FromStr};
 
@@ -37,6 +38,13 @@ impl ContentRequest {
             },
         }
     }
+    pub fn hash(&self) -> Hash {
+        match self {
+            ContentRequest::Hash(hash) => *hash,
+            ContentRequest::HashAndFormat(haf) => haf.hash,
+            ContentRequest::Ticket(ticket) => ticket.hash(),
+        }
+    }
 }
 
 impl FromStr for ContentRequest {
@@ -54,12 +62,13 @@ impl FromStr for ContentRequest {
     }
 }
 
-async fn query_dht(
+pub async fn query_dht(
     content: ContentRequest,
     partial: bool,
     verified: bool,
     udp_port: Option<u16>,
 ) -> Result<(), Box<dyn Error>> {
+    let _providers: Vec<NodeId> = Vec::new();
     let bind_addr = SocketAddr::V4(SocketAddrV4::new(
         Ipv4Addr::UNSPECIFIED,
         udp_port.unwrap_or_default(),
@@ -75,28 +84,16 @@ async fn query_dht(
     };
     println!("content corresponds to infohash {}", to_infohash(q.content));
 
-    let mut stream = discovery.query_dht(dht, q).await?;
-    while let Some(announce) = stream.next().await {
-        if announce.verify().is_ok() {
-            println!("found verified provider {}", announce.host);
-        } else {
-            println!("got wrong signed announce!");
-        }
-    }
-    Ok(())
-}
+    let _stream = discovery.query_dht(dht, q).await?;
+    // while let Some(announce) = stream.next().await {
+    //     if announce.verify().is_ok() {
+    //         println!("found verified provider {}", announce.host);
+    //         providers.push(announce.host);
+    //     } else {
+    //         println!("got wrong signed announce!");
+    //     }
+    // }
+    // Ok(providers)
 
-pub async fn query_fs_entry(
-    id: NamespaceId,
-    partial: bool,
-    verified: bool,
-    udp_port: Option<u16>,
-) -> Result<(), Box<dyn Error>> {
-    query_dht(
-        ContentRequest::Hash(Hash::new(id)),
-        partial,
-        verified,
-        udp_port,
-    )
-    .await
+    Ok(())
 }
