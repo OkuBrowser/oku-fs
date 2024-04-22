@@ -80,7 +80,7 @@ impl OkuFs {
         let node = FsNode::persistent(node_path).await?.spawn().await?;
         let authors = node.authors.list().await?;
         futures::pin_mut!(authors);
-        let authors_count = (&authors.as_mut().count().await).to_owned();
+        let authors_count = authors.as_mut().count().await.to_owned();
         let author_id = if authors_count == 0 {
             node.authors.create().await?
         } else {
@@ -414,7 +414,7 @@ impl OkuFs {
         //         Some(node_addrs)
         //     }
         // };
-        let content = ContentRequest::Hash(Hash::new(namespace_id.clone()));
+        let content = ContentRequest::Hash(Hash::new(namespace_id));
         let secret_key = self.node.magic_endpoint().secret_key();
         let endpoint = MagicEndpoint::builder()
             .alpns(vec![])
@@ -429,7 +429,7 @@ impl OkuFs {
             content: content.hash_and_format(),
             flags: QueryFlags {
                 complete: !partial,
-                verified: verified,
+                verified,
             },
         };
         println!("content corresponds to infohash {}", to_infohash(q.content));
@@ -503,7 +503,7 @@ pub fn load_or_create_author() -> Result<Author, Box<dyn Error>> {
             let mut rng = OsRng;
             let author = Author::new(&mut rng);
             let author_bytes = author.to_bytes();
-            std::fs::write(path, &author_bytes)?;
+            std::fs::write(path, author_bytes)?;
             Ok(author)
         }
     }

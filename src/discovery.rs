@@ -48,7 +48,7 @@ pub const ANNOUNCE_PARALLELISM: usize = 10;
 /// * `namespace_id` - The ID of the replica to announce.
 pub async fn announce_replica(namespace_id: NamespaceId) -> Result<(), Box<dyn Error>> {
     let mut content = BTreeSet::new();
-    content.insert(HashAndFormat::raw(Hash::new(namespace_id.clone())));
+    content.insert(HashAndFormat::raw(Hash::new(namespace_id)));
     let dht = mainline::Dht::default();
     let announce_stream = announce_dht(dht, content, DISCOVERY_PORT, ANNOUNCE_PARALLELISM);
     tokio::pin!(announce_stream);
