@@ -43,17 +43,22 @@ pub enum OkuFsError {
 }
 
 #[derive(Error, Debug, Diagnostic)]
+/// Content discovery errors.
 pub enum OkuDiscoveryError {
     #[error("Invalid hash and format.")]
     #[diagnostic(code(discovery::invalid_hash_and_format), url(docsrs))]
+    /// Invalid hash and format.
     InvalidHashAndFormat,
     #[error("Unable to discover node address for node ID.")]
     #[diagnostic(code(discovery::node_address_discovery_failed), url(docsrs))]
+    /// Unable to discover node address for node ID.
     NodeAddressDiscoveryFailed,
-    #[error("Unable to find nodes able to satisfy query")]
+    #[error("Unable to find nodes able to satisfy query.")]
     #[diagnostic(code(discovery::no_nodes_found), url(docsrs))]
+    /// Unable to find nodes able to satisfy query.
     NoNodesFound,
     #[error("Unsupported protocol identifier: {0}")]
     #[diagnostic(code(discovery::unsupported_alpn), url(docsrs))]
+    /// Unsupported protocol identifier.
     UnsupportedALPN(String),
 }
