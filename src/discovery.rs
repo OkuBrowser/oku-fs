@@ -16,6 +16,8 @@ pub const INITIAL_PUBLISH_DELAY: Duration = Duration::from_millis(500);
 
 /// The port used for communication between other Oku filesystem nodes.
 pub const DISCOVERY_PORT: u16 = 4938;
+
+/// The number of parallel announcements to make to the mainline DHT.
 pub const ANNOUNCE_PARALLELISM: usize = 10;
 
 // pub fn announce_dht(

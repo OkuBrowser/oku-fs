@@ -389,8 +389,6 @@ impl OkuFs {
     /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
     ///
     /// * `verified` - Whether to discover peers who have been verified to have the replica.
-    ///
-    /// * `udp_port` - Optionally-specified UDP port to use for querying the mainline DHT.
     pub async fn get_external_replica(
         &self,
         namespace_id: NamespaceId,
