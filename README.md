@@ -1,6 +1,6 @@
 # `oku-fs`
 
-An implementation of the file system used in the Oku browser.
+A distributed file system for use with the Oku browser.
 
 Files and directories are stored in replicas implemented as Iroh documents, allowing them to be shared publicly over the mainline DHT or directly between Oku file system nodes.
 

@@ -45,7 +45,7 @@ enum Commands {
         path: PathBuf,
     },
     RemoveReplica {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_name = "REPLICA_ID")]
         replica_id: NamespaceId,
     },
     MoveFile {
@@ -57,7 +57,7 @@ enum Commands {
         new_path: PathBuf,
     },
     GetReplica {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_name = "REPLICA_ID")]
         replica_id: NamespaceId,
     },
 }

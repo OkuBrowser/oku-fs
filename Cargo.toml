@@ -2,6 +2,12 @@
 name = "oku-fs"
 version = "0.1.0"
 edition = "2021"
+authors = ["Emil Sayahi <limesayahi@gmail.com>"]
+description = "A distributed file system for use with the Oku browser."
+readme = "README.md"
+repository = "https://github.com/emmyoh/oku-fs/"
+documentation = "https://emmyoh.github.io/oku-fs/oku_fs/"
+license = "AGPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
