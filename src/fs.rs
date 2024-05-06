@@ -523,10 +523,7 @@ impl OkuFs {
         };
         let info_hash = to_infohash(q.content);
         println!("content corresponds to infohash {}", info_hash);
-        let peer_content_request = PeerContentRequest {
-            namespace_id,
-            path,
-        };
+        let peer_content_request = PeerContentRequest { namespace_id, path };
         let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
         println!(
             "peer_content_request_string: {:#?}",
