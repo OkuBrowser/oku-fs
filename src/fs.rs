@@ -441,7 +441,7 @@ impl OkuFs {
             if let Some(first_line) = incoming_lines.next() {
                 println!(
                     "First: {:#?}",
-                    String::from_utf8_lossy(&first_line).to_string()
+                    String::from_utf8_lossy(first_line).to_string()
                 );
                 if first_line == ALPN_DOCUMENT_TICKET_FETCH {
                     let remaining_lines: Vec<Vec<u8>> =
@@ -461,7 +461,7 @@ impl OkuFs {
                     println!("Response: {:#?}", peer_content_response);
                     let peer_content_response_string =
                         serde_json::to_string(&peer_content_response)?;
-                    stream.write_all(&peer_content_response_string.as_bytes())?;
+                    stream.write_all(peer_content_response_string.as_bytes())?;
                     stream.flush()?;
                 }
             }
@@ -524,8 +524,8 @@ impl OkuFs {
         let info_hash = to_infohash(q.content);
         println!("content corresponds to infohash {}", info_hash);
         let peer_content_request = PeerContentRequest {
-            namespace_id: namespace_id,
-            path: path,
+            namespace_id,
+            path,
         };
         let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
         println!(
@@ -569,7 +569,7 @@ impl OkuFs {
             let mut request = Vec::new();
             request.write_all(ALPN_DOCUMENT_TICKET_FETCH)?;
             request.write_all(b"\n")?;
-            request.write_all(&peer_content_request_string.as_bytes())?;
+            request.write_all(peer_content_request_string.as_bytes())?;
             request.flush()?;
             // stream.write_all(ALPN_DOCUMENT_TICKET_FETCH)?;
             // stream.write_all(&peer_content_request_bytes)?;
@@ -578,7 +578,7 @@ impl OkuFs {
             let mut response_bytes = Vec::new();
             stream.read_to_end(&mut response_bytes)?;
             let response: PeerContentResponse =
-                serde_json::from_str(&String::from_utf8_lossy(&response_bytes).to_string())?;
+                serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
             println!("Response: {:#?}", response);
             match response.ticket_response {
                 PeerTicketResponse::Document(document_ticket) => {
