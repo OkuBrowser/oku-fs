@@ -46,10 +46,6 @@ fn normalise_path(path: PathBuf) -> PathBuf {
 /// A null-terminated byte string representing the path.
 pub fn path_to_entry_key(path: PathBuf) -> Bytes {
     let path = normalise_path(path.clone());
-    // let mut hasher = Sha3_256::new();
-    // hasher.update(path.clone().into_os_string().into_encoded_bytes());
-    // let path_hash = hasher.finalize();
-    // format!("{}\u{F0000}{}", path.display(), hex::encode(path_hash))
     let mut path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.push(b'\0');
     path_bytes.into()
@@ -91,7 +87,6 @@ impl OkuFs {
         let oku_fs = OkuFs { node, author_id };
         let oku_fs_clone = oku_fs.clone();
         let node_addr = oku_fs.node.my_addr().await?;
-        println!("{:#?}", node_addr);
         let addr_info = node_addr.info;
         let magic_endpoint = oku_fs.node.magic_endpoint();
         let secret_key = magic_endpoint.secret_key();
@@ -434,31 +429,17 @@ impl OkuFs {
             let received: Vec<u8> = buf_reader.fill_buf()?.to_vec();
             buf_reader.consume(received.len());
             let mut incoming_lines = received.split(|x| *x == 10);
-            println!(
-                "Received: {:#?}",
-                String::from_utf8_lossy(&received).to_string()
-            );
             if let Some(first_line) = incoming_lines.next() {
-                println!(
-                    "First: {:#?}",
-                    String::from_utf8_lossy(first_line).to_string()
-                );
                 if first_line == ALPN_DOCUMENT_TICKET_FETCH {
                     let remaining_lines: Vec<Vec<u8>> =
                         incoming_lines.map(|x| x.to_owned()).collect();
                     let peer_content_request_bytes = remaining_lines.concat();
                     let peer_content_request_str =
                         String::from_utf8_lossy(&peer_content_request_bytes).to_string();
-                    println!(
-                        "Second: {:#?}",
-                        String::from_utf8_lossy(&peer_content_request_bytes).to_string()
-                    );
                     let peer_content_request = serde_json::from_str(&peer_content_request_str)?;
-                    println!("Request: {:#?}", peer_content_request);
                     let peer_content_response = self
                         .respond_to_content_request(peer_content_request)
                         .await?;
-                    println!("Response: {:#?}", peer_content_response);
                     let peer_content_response_string =
                         serde_json::to_string(&peer_content_response)?;
                     stream.write_all(peer_content_response_string.as_bytes())?;
@@ -476,6 +457,8 @@ impl OkuFs {
     ///
     /// * `namespace_id` - The ID of the replica to fetch.
     ///
+    /// * `path` - An optional path of requested files within the replica.
+    ///
     /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
     ///
     /// * `verified` - Whether to discover peers who have been verified to have the replica.
@@ -486,33 +469,7 @@ impl OkuFs {
         partial: bool,
         verified: bool,
     ) -> Result<(), Box<dyn Error>> {
-        // let discovery_items_stream = self
-        //     .discovery_service
-        //     .resolve(self.node.magic_endpoint().clone(), node_id);
-        // return match discovery_items_stream {
-        //     None => None,
-        //     Some(discovery_items) => {
-        //         pin_mut!(discovery_items);
-        //         let node_addrs: Vec<NodeAddr> = discovery_items
-        //             .map(|item| NodeAddr {
-        //                 node_id,
-        //                 info: item.unwrap().addr_info,
-        //             })
-        //             .collect()
-        //             .await;
-        //         Some(node_addrs)
-        //     }
-        // };
         let content = ContentRequest::Hash(Hash::new(namespace_id));
-        // let secret_key = self.node.magic_endpoint().secret_key();
-        // let endpoint = MagicEndpoint::builder()
-        //     .alpns(vec![])
-        //     .secret_key(secret_key.clone())
-        //     .discovery(Box::new(self.create_discovery_service().await?))
-        //     .bind(0)
-        //     .await?;
-        // let bind_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT));
-        // let discovery = UdpDiscovery::new(bind_addr).await?;
         let dht = mainline::Dht::default();
         let q = Query {
             content: content.hash_and_format(),
@@ -522,64 +479,23 @@ impl OkuFs {
             },
         };
         let info_hash = to_infohash(q.content);
-        println!("content corresponds to infohash {}", info_hash);
-        let peer_content_request = PeerContentRequest {
-            namespace_id,
-            path,
-        };
+        let peer_content_request = PeerContentRequest { namespace_id, path };
         let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
-        println!(
-            "peer_content_request_string: {:#?}",
-            peer_content_request_string
-        );
 
         let mut addrs = dht.get_peers(info_hash);
         for peer_response in &mut addrs {
-            println!(
-                "Got peer: {:?} | from: {:?}",
-                peer_response.peer, peer_response.from
-            );
-            // println!("{:#?}", peer_response);
-            // let client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
-            // let client_config = {
-            //     let alpn = vec![ALPN_DOCUMENT_TICKET_FETCH.to_vec()];
-            //     let tls_client_config = iroh::net::tls::make_client_config(
-            //         endpoint.secret_key(),
-            //         Some(self.node.node_id()),
-            //         alpn,
-            //         false,
-            //     )?;
-            //     let mut client_config = quinn::ClientConfig::new(Arc::new(tls_client_config));
-            //     let mut transport_config = quinn::TransportConfig::default();
-            //     transport_config.keep_alive_interval(Some(Duration::from_secs(1)));
-            //     client_config.transport_config(Arc::new(transport_config));
-            //     client_config
-            // };
-            // let connection = client_endpoint.connect_with(client_config, peer_response.peer, "localhost")?.await?;
-            // // let connection = client_endpoint
-            // //     .connect(peer_response.peer, std::str::from_utf8(ALPN_DOCUMENT_TICKET_FETCH)?)
-            // //     ?
-            // //     .await
-            // //     ?;
-            // println!("[client] connected: addr={}", connection.remote_address());
-            // let (mut send, mut recv) = connection.open_bi().await?;
-            // send.write_all(&postcard::to_stdvec(namespace_id.as_bytes())?)
-            //     .await?;
             let mut stream = TcpStream::connect(peer_response.peer)?;
             let mut request = Vec::new();
             request.write_all(ALPN_DOCUMENT_TICKET_FETCH)?;
             request.write_all(b"\n")?;
             request.write_all(peer_content_request_string.as_bytes())?;
             request.flush()?;
-            // stream.write_all(ALPN_DOCUMENT_TICKET_FETCH)?;
-            // stream.write_all(&peer_content_request_bytes)?;
             stream.write_all(&request)?;
             stream.flush()?;
             let mut response_bytes = Vec::new();
             stream.read_to_end(&mut response_bytes)?;
             let response: PeerContentResponse =
                 serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
-            println!("Response: {:#?}", response);
             match response.ticket_response {
                 PeerTicketResponse::Document(document_ticket) => {
                     if document_ticket.capability.id() != namespace_id {
@@ -607,21 +523,6 @@ impl OkuFs {
 
         Ok(())
     }
-
-    // pub async fn get_external_replica(&self, namespace_id: NamespaceId) -> Result<(), Box<dyn Error>> {
-    //     // let providers: Vec<NodeId> =
-    //     //     discovery::query_dht(ContentRequest::Hash(Hash::new(namespace)), true, true, None)
-    //     //         .await?;
-    //     // for provider in providers {
-    //     //     let node_addrs = self.discover_node(provider).await;
-    //     //     if let Some(node_addrs) = node_addrs {
-    //     //         for node_addr in node_addrs {
-    //     //             self.node.inner.sync
-    //     //         }
-    //     //     }
-    //     // }
-    //     Ok(())
-    // }
 }
 
 /// Imports the author credentials of the file system from disk, or creates new credentials if none exist.

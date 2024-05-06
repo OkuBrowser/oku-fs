@@ -21,12 +21,8 @@ pub enum OkuDiscoveryError {
     #[diagnostic(code(discovery::invalid_hash_and_format), url(docsrs))]
     /// Invalid hash and format.
     InvalidHashAndFormat,
-    #[error("Unable to find nodes able to satisfy query.")]
-    #[diagnostic(code(discovery::no_nodes_found), url(docsrs))]
-    /// Unable to find nodes able to satisfy query.
-    NoNodesFound,
-    #[error("Unsupported protocol identifier: {0}")]
-    #[diagnostic(code(discovery::unsupported_alpn), url(docsrs))]
-    /// Unsupported protocol identifier.
-    UnsupportedALPN(String),
+    #[error("Problem announcing {0} ({1}).")]
+    #[diagnostic(code(discovery::problem_announcing_content), url(docsrs))]
+    /// Problem announcing content.
+    ProblemAnnouncingContent(String, String),
 }

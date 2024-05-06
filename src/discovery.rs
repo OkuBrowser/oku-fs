@@ -22,29 +22,6 @@ pub const DISCOVERY_PORT: u16 = 4938;
 /// The number of parallel announcements to make to the mainline DHT.
 pub const ANNOUNCE_PARALLELISM: usize = 10;
 
-// pub fn announce_dht(
-//     dht: mainline::dht::Dht,
-//     content: BTreeSet<HashAndFormat>,
-//     port: Option<u16>,
-//     announce_parallelism: usize,
-// ) -> impl Stream<Item = (HashAndFormat, mainline::Result<mainline::StoreQueryMetdata>)> {
-//     let dht = dht.as_async();
-//     futures::stream::iter(content)
-//         .map(move |content| {
-//             let dht = dht.clone();
-//             async move {
-//                 let info_hash = to_infohash(content);
-//                 println!(
-//                     "announcing content that corresponds to infohash {}",
-//                     info_hash
-//                 );
-//                 let res = dht.announce_peer(info_hash, port).await;
-//                 (content, res)
-//             }
-//         })
-//         .buffer_unordered(announce_parallelism)
-// }
-
 /// Announces a local replica to the mainline DHT.
 ///
 /// # Arguments
@@ -58,8 +35,11 @@ pub async fn announce_replica(namespace_id: NamespaceId) -> Result<(), Box<dyn E
     tokio::pin!(announce_stream);
     while let Some((content, res)) = announce_stream.next().await {
         match res {
-            Ok(_) => println!("announced {:?}", content),
-            Err(e) => eprintln!("error announcing {:?}: {:?}", content, e),
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "{}",
+                OkuDiscoveryError::ProblemAnnouncingContent(content.to_string(), e.to_string())
+            ),
         }
     }
     Ok(())
@@ -115,42 +95,6 @@ impl FromStr for ContentRequest {
         }
     }
 }
-
-// pub async fn query_dht(
-//     content: ContentRequest,
-//     partial: bool,
-//     verified: bool,
-//     udp_port: Option<u16>,
-// ) -> Result<(), Box<dyn Error>> {
-//     let _providers: Vec<NodeId> = Vec::new();
-//     let bind_addr = SocketAddr::V4(SocketAddrV4::new(
-//         Ipv4Addr::UNSPECIFIED,
-//         udp_port.unwrap_or_default(),
-//     ));
-//     let discovery = UdpDiscovery::new(bind_addr).await?;
-//     let dht = mainline::Dht::default();
-//     let q = Query {
-//         content: content.hash_and_format(),
-//         flags: QueryFlags {
-//             complete: !partial,
-//             verified: verified,
-//         },
-//     };
-//     println!("content corresponds to infohash {}", to_infohash(q.content));
-
-//     let _stream = discovery.query_dht(dht, q).await?;
-//     // while let Some(announce) = stream.next().await {
-//     //     if announce.verify().is_ok() {
-//     //         println!("found verified provider {}", announce.host);
-//     //         providers.push(announce.host);
-//     //     } else {
-//     //         println!("got wrong signed announce!");
-//     //     }
-//     // }
-//     // Ok(providers)
-
-//     Ok(())
-// }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A content ticket sent in response to a peer requesting content.
