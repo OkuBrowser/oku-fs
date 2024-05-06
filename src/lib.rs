@@ -1,3 +1,7 @@
+#![doc = include_str!("../README.md")]
+#![feature(doc_auto_cfg)]
+#![warn(missing_docs)]
+
 /// Content discovery and retrieval.
 pub mod discovery;
 /// Errors originating in the Oku file system implementation.

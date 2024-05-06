@@ -349,6 +349,15 @@ impl OkuFs {
         Ok(entries_deleted)
     }
 
+    /// Respond to requests for content from peers.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - A request for content.
+    ///
+    /// # Returns
+    ///
+    /// A response containing a ticket for the content.
     pub async fn respond_to_content_request(
         &self,
         request: PeerContentRequest,

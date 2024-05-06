@@ -153,19 +153,28 @@ impl FromStr for ContentRequest {
 // }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A content ticket sent in response to a peer requesting content.
 pub enum PeerTicketResponse {
+    /// A ticket pointing to a replica.
     Document(DocTicket),
+    /// A list of tickets pointing to files.
     Entries(Vec<BlobTicket>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A request for content from a peer.
 pub struct PeerContentRequest {
+    /// The ID of a requested replica.
     pub namespace_id: NamespaceId,
+    /// An optional path of requested files within the replica.
     pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A response to a peer requesting content.
 pub struct PeerContentResponse {
+    /// A ticket satisfying the content request.
     pub ticket_response: PeerTicketResponse,
+    /// The size, in bytes, of the requested content.
     pub content_size: u64,
 }
