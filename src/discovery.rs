@@ -3,9 +3,11 @@ use futures::StreamExt;
 use iroh::{
     bytes::{Hash, HashAndFormat},
     sync::NamespaceId,
-    ticket::BlobTicket,
+    ticket::{BlobTicket, DocTicket},
 };
 use iroh_mainline_content_discovery::announce_dht;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::{collections::BTreeSet, error::Error, str::FromStr, time::Duration};
 
 /// The delay between republishing content to the mainline DHT.
@@ -149,3 +151,21 @@ impl FromStr for ContentRequest {
 
 //     Ok(())
 // }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerTicketResponse {
+    Document(DocTicket),
+    Entries(Vec<BlobTicket>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerContentRequest {
+    pub namespace_id: NamespaceId,
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerContentResponse {
+    pub ticket_response: PeerTicketResponse,
+    pub content_size: u64,
+}

@@ -57,8 +57,10 @@ enum Commands {
         new_path: PathBuf,
     },
     GetReplica {
-        #[arg(value_name = "REPLICA_ID")]
+        #[arg(short, long, value_name = "REPLICA_ID")]
         replica_id: NamespaceId,
+        #[arg(short, long, value_name = "PATH", default_missing_value = None)]
+        path: Option<PathBuf>,
     },
 }
 
@@ -117,8 +119,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
             println!("Moved file from {:?} to {:?}", old_path, new_path);
         }
-        Some(Commands::GetReplica { replica_id }) => {
-            node.get_external_replica(replica_id, true, true).await?;
+        Some(Commands::GetReplica { replica_id, path }) => {
+            node.get_external_replica(replica_id, path, true, true)
+                .await?;
             let files = node.list_files(replica_id).await?;
             for file in files {
                 println!("{:#?}", file);
