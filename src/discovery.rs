@@ -27,7 +27,9 @@ pub const ANNOUNCE_PARALLELISM: usize = 10;
 /// # Arguments
 ///
 /// * `namespace_id` - The ID of the replica to announce.
-pub async fn announce_replica(namespace_id: NamespaceId) -> Result<(), Box<dyn Error>> {
+pub async fn announce_replica(
+    namespace_id: NamespaceId,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut content = BTreeSet::new();
     content.insert(HashAndFormat::raw(Hash::new(namespace_id)));
     let dht = mainline::Dht::default();
@@ -82,8 +84,8 @@ impl ContentRequest {
 }
 
 impl FromStr for ContentRequest {
-    type Err = Box<dyn Error>;
-    fn from_str(s: &str) -> Result<Self, Box<dyn Error>> {
+    type Err = Box<dyn Error + Send + Sync>;
+    fn from_str(s: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if let Ok(hash) = Hash::from_str(s) {
             Ok(hash.into())
         } else if let Ok(haf) = HashAndFormat::from_str(s) {

@@ -65,7 +65,7 @@ enum Commands {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let cli = Cli::parse();
     let node = OkuFs::start().await?;
     match cli.command {
