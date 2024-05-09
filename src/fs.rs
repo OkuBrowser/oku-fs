@@ -20,7 +20,8 @@ use iroh_mainline_content_discovery::to_infohash;
 use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
 use path_clean::PathClean;
 use rand_core::OsRng;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{error::Error, path::PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -31,6 +32,12 @@ pub const FS_PATH: &str = ".oku";
 
 /// The protocol identifier for exchanging document tickets.
 pub const ALPN_DOCUMENT_TICKET_FETCH: &[u8] = b"oku/document-ticket/fetch/v0";
+
+/// The protocol identifier for initially connecting to relays.
+pub const ALPN_INITIAL_RELAY_CONNECTION: &[u8] = b"oku/relay/connect/v0";
+
+/// The protocol identifier for fetching its list of replicas.
+pub const ALPN_RELAY_FETCH: &[u8] = b"oku/relay/fetch/v0";
 
 fn normalise_path(path: PathBuf) -> PathBuf {
     PathBuf::from("/").join(path).clean()
@@ -52,6 +59,13 @@ pub fn path_to_entry_key(path: PathBuf) -> Bytes {
     path_bytes.into()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+///  The configuration of the file system.
+pub struct OkuFsConfig {
+    /// An optional address to facilitate communication behind NAT.
+    pub relay_address: Option<String>,
+}
+
 /// An instance of an Oku file system.
 ///
 /// The `OkuFs` struct is the primary interface for interacting with an Oku file system.
@@ -61,6 +75,8 @@ pub struct OkuFs {
     node: FsNode,
     /// The public key of the author of the file system.
     author_id: AuthorId,
+    /// The configuration of the file system.
+    config: OkuFsConfig,
 }
 
 impl OkuFs {
@@ -85,7 +101,12 @@ impl OkuFs {
             let authors_list: Vec<AuthorId> = authors.map(|author| author.unwrap()).collect().await;
             authors_list[0]
         };
-        let oku_fs = OkuFs { node, author_id };
+        let config = load_or_create_config()?;
+        let oku_fs = OkuFs {
+            node,
+            author_id,
+            config,
+        };
         let oku_fs_clone = oku_fs.clone();
         let node_addr = oku_fs.node.my_addr().await?;
         let addr_info = node_addr.info;
@@ -97,6 +118,16 @@ impl OkuFs {
         discovery_service.publish(&addr_info);
         let docs_client = &oku_fs.node.docs;
         let docs_client = docs_client.clone();
+        if let Some(relay_address) = oku_fs_clone.config.relay_address {
+            let oku_fs_clone = oku_fs.clone();
+            tokio::spawn(async move {
+                oku_fs_clone
+                    .connect_to_relay(relay_address.to_string())
+                    .await
+                    .unwrap();
+            });
+        }
+        let oku_fs_clone = oku_fs.clone();
         tokio::spawn(async move {
             oku_fs_clone
                 .listen_for_document_ticket_fetch_requests()
@@ -548,6 +579,40 @@ impl OkuFs {
 
         Ok(())
     }
+
+    /// Connects to a relay to facilitate communication behind NAT.
+    /// Upon connecting, the file system will send a list of all replicas to the relay. Periodically, the relay will request the list of replicas again using the same connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `relay_address` - The address of the relay to connect to.
+    pub async fn connect_to_relay(
+        &self,
+        relay_address: String,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let relay_addr = relay_address.parse::<SocketAddr>()?;
+        let mut stream = TcpStream::connect(relay_addr).await?;
+        let all_replicas = self.list_replicas().await?;
+        let all_replicas_str = serde_json::to_string(&all_replicas)?;
+        let mut request = Vec::new();
+        request.write_all(ALPN_INITIAL_RELAY_CONNECTION).await?;
+        request.write_all(b"\n").await?;
+        request.write_all(all_replicas_str.as_bytes()).await?;
+        request.flush().await?;
+        stream.write_all(&request).await?;
+        stream.flush().await?;
+        loop {
+            let mut response_bytes = Vec::new();
+            stream.read_to_end(&mut response_bytes).await?;
+            if response_bytes == ALPN_RELAY_FETCH {
+                let all_replicas = self.list_replicas().await?;
+                let all_replicas_str = serde_json::to_string(&all_replicas)?;
+                stream.write_all(all_replicas_str.as_bytes()).await?;
+                stream.flush().await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Imports the author credentials of the file system from disk, or creates new credentials if none exist.
@@ -570,6 +635,27 @@ pub fn load_or_create_author() -> Result<Author, Box<dyn Error + Send + Sync>> {
             let author_bytes = author.to_bytes();
             std::fs::write(path, author_bytes)?;
             Ok(author)
+        }
+    }
+}
+
+/// Loads the configuration of the file system from disk, or creates a new configuration if none exists.
+///
+/// # Returns
+///
+/// The configuration of the file system.
+pub fn load_or_create_config() -> Result<OkuFsConfig, Box<dyn Error + Send + Sync>> {
+    let path = PathBuf::from(FS_PATH).join("config");
+    let config_file_contents = std::fs::read_to_string(path.clone());
+    match config_file_contents {
+        Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml)?),
+        Err(_) => {
+            let config = OkuFsConfig {
+                relay_address: None,
+            };
+            let config_toml = toml::to_string(&config)?;
+            std::fs::write(path, config_toml)?;
+            Ok(config)
         }
     }
 }

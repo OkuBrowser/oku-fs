@@ -2,6 +2,8 @@
 
 A distributed file system for use with the Oku browser.
 
+## Technical Design
+
 Files and directories are stored in replicas implemented as Iroh documents, allowing them to be shared publicly over the mainline DHT or directly between Oku file system nodes.
 
 An Oku file system node consists of three parts:
@@ -20,4 +22,14 @@ Content discovery occurs over [the mainline DHT](https://en.wikipedia.org/wiki/M
     - Port forwarding is necessary to both (1) announce content on the DHT and (2) respond with document tickets when behind NAT.
 4. The node uses the swarm ticket to connect to the document swarm and download the document.
 
-As a reminder, 'documents' are in fact entire replicas, with multiple files and directories. Fetching individual files or directories has not yet been implemented.
+### NAT
+
+Nodes behind NAT (eg, devices on a home network using IPv4) are unable to listen for incoming connections. This means address and content announcements on the DHT will be meaningless; external nodes will be unable to initiate connections to a local address. Consequently, the node will be unable to serve external requests for content (ie, perform ticket exchanges), as no external nodes will be able to reach it.
+
+To solve this, a relay node is used. These relay nodes:
+- Are port-forwarded to route traffic to-and-from the local network.
+- Perform DHT announcements on behalf of the connected nodes behind NAT.
+- Facilitate ticket exchanges between the appropriate connected nodes and external nodes.
+
+To enable this functionality, relay nodes maintain a list of which replicas are held by which nodes behind NAT.
+When an external node requests a replica, said external node connects to the relay node, and the relay node finds the appropriate connected node and begins acting as a middleman during the ticket exchange.

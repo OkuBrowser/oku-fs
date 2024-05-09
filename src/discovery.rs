@@ -107,7 +107,7 @@ pub enum PeerTicketResponse {
     Entries(Vec<BlobTicket>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 /// A request for content from a peer.
 pub struct PeerContentRequest {
     /// The ID of a requested replica.

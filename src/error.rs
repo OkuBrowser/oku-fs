@@ -26,3 +26,12 @@ pub enum OkuDiscoveryError {
     /// Problem announcing content.
     ProblemAnnouncingContent(String, String),
 }
+
+#[derive(Error, Debug, Diagnostic)]
+/// Relay errors.
+pub enum OkuRelayError {
+    #[error("No connected node can satisfy {0}.")]
+    #[diagnostic(code(relay::cannot_satisfy_request), url(docsrs))]
+    /// No connected node can satisfy request.
+    CannotSatisfyRequest(String),
+}
