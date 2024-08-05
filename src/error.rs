@@ -34,4 +34,8 @@ pub enum OkuRelayError {
     #[diagnostic(code(relay::cannot_satisfy_request), url(docsrs))]
     /// No connected node can satisfy request.
     CannotSatisfyRequest(String),
+    #[error("Problem connecting to {0}.")]
+    #[diagnostic(code(relay::problem_connecting), url(docsrs))]
+    /// Problem connecting to node.
+    ProblemConnecting(String),
 }

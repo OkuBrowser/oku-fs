@@ -2,6 +2,7 @@ use crate::discovery::{announce_replica, INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY}
 use crate::discovery::{
     PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
 };
+use crate::error::OkuRelayError;
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
@@ -128,6 +129,7 @@ impl OkuFs {
                 oku_fs_clone
                     .connect_to_relay(relay_address.to_string())
                     .await
+                    .map_err(|e| OkuRelayError::ProblemConnecting(relay_address.to_string()))
                     .unwrap();
             });
         }
