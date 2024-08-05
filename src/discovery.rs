@@ -1,9 +1,9 @@
 use crate::error::OkuDiscoveryError;
 use futures::StreamExt;
 use iroh::{
-    bytes::{Hash, HashAndFormat},
-    sync::NamespaceId,
-    ticket::{BlobTicket, DocTicket},
+    base::hash::{Hash, HashAndFormat},
+    base::ticket::BlobTicket,
+    docs::{DocTicket, NamespaceId},
 };
 use iroh_mainline_content_discovery::announce_dht;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub async fn announce_replica(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut content = BTreeSet::new();
     content.insert(HashAndFormat::raw(Hash::new(namespace_id)));
-    let dht = mainline::Dht::default();
+    let dht = mainline::Dht::server()?;
     let announce_stream = announce_dht(dht, content, DISCOVERY_PORT, ANNOUNCE_PARALLELISM);
     tokio::pin!(announce_stream);
     while let Some((content, res)) = announce_stream.next().await {

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use iroh::sync::NamespaceId;
+use iroh::docs::NamespaceId;
 use oku_fs::fs::OkuFs;
 use std::{error::Error, path::PathBuf};
 

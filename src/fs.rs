@@ -5,19 +5,22 @@ use crate::discovery::{
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
-use iroh::client::Entry;
-use iroh::rpc_protocol::BlobDownloadRequest;
-use iroh::ticket::BlobTicket;
+use iroh::base::node_addr::AddrInfoOptions;
+use iroh::base::ticket::BlobTicket;
+use iroh::blobs::downloader::DownloadRequest;
+use iroh::client::docs::Entry;
+use iroh::net::discovery::dns::DnsDiscovery;
+use iroh::net::discovery::pkarr::PkarrPublisher;
 use iroh::{
-    bytes::Hash,
+    base::hash::Hash,
+    client::docs::ShareMode,
+    docs::{Author, AuthorId, NamespaceId},
     net::discovery::{ConcurrentDiscovery, Discovery},
     node::FsNode,
-    rpc_protocol::ShareMode,
-    sync::{Author, AuthorId, NamespaceId},
 };
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
-use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
+// use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
 use path_clean::PathClean;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -90,13 +93,13 @@ impl OkuFs {
     pub async fn start() -> Result<OkuFs, Box<dyn Error + Send + Sync>> {
         let node_path = PathBuf::from(FS_PATH).join("node");
         let node = FsNode::persistent(node_path).await?.spawn().await?;
-        let authors = node.authors.list().await?;
+        let authors = node.authors().list().await?;
         futures::pin_mut!(authors);
         let authors_count = authors.as_mut().count().await.to_owned();
         let author_id = if authors_count == 0 {
-            node.authors.create().await?
+            node.authors().create().await?
         } else {
-            let authors = node.authors.list().await?;
+            let authors = node.authors().list().await?;
             futures::pin_mut!(authors);
             let authors_list: Vec<AuthorId> = authors.map(|author| author.unwrap()).collect().await;
             authors_list[0]
@@ -107,17 +110,19 @@ impl OkuFs {
             author_id,
             config,
         };
-        let oku_fs_clone = oku_fs.clone();
-        let node_addr = oku_fs.node.my_addr().await?;
+        let node_addr = oku_fs.node.node_addr().await?;
         let addr_info = node_addr.info;
-        let magic_endpoint = oku_fs.node.magic_endpoint();
+        let magic_endpoint = oku_fs.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
-        let mut discovery_service = ConcurrentDiscovery::new();
-        let pkarr = PkarrNodeDiscovery::builder().secret_key(secret_key).build();
+        let mut discovery_service = ConcurrentDiscovery::empty();
+        let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
+        let dns = DnsDiscovery::n0_dns();
         discovery_service.add(pkarr);
+        discovery_service.add(dns);
         discovery_service.publish(&addr_info);
-        let docs_client = &oku_fs.node.docs;
+        let docs_client = oku_fs.node.docs();
         let docs_client = docs_client.clone();
+        let oku_fs_clone = oku_fs.clone();
         if let Some(relay_address) = oku_fs_clone.config.relay_address {
             let oku_fs_clone = oku_fs.clone();
             tokio::spawn(async move {
@@ -146,7 +151,7 @@ impl OkuFs {
                 tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
             }
         });
-        Ok(oku_fs)
+        Ok(oku_fs.clone())
     }
 
     /// Create a mechanism for discovering other nodes on the network given their IDs.
@@ -157,20 +162,22 @@ impl OkuFs {
     pub async fn create_discovery_service(
         &self,
     ) -> Result<ConcurrentDiscovery, Box<dyn Error + Send + Sync>> {
-        let node_addr = self.node.my_addr().await?;
+        let node_addr = self.node.node_addr().await?;
         let addr_info = node_addr.info;
-        let magic_endpoint = self.node.magic_endpoint();
+        let magic_endpoint = self.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
-        let mut discovery_service = ConcurrentDiscovery::new();
-        let pkarr = PkarrNodeDiscovery::builder().secret_key(secret_key).build();
+        let mut discovery_service = ConcurrentDiscovery::empty();
+        let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
+        let dns = DnsDiscovery::n0_dns();
         discovery_service.add(pkarr);
+        discovery_service.add(dns);
         discovery_service.publish(&addr_info);
         Ok(discovery_service)
     }
 
     /// Shuts down the Oku file system.
-    pub fn shutdown(self) {
-        self.node.shutdown();
+    pub async fn shutdown(self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        Ok(self.node.shutdown().await?)
     }
 
     /// Creates a new replica in the file system.
@@ -179,7 +186,7 @@ impl OkuFs {
     ///
     /// The ID of the new replica, being its public key.
     pub async fn create_replica(&self) -> Result<NamespaceId, Box<dyn Error + Send + Sync>> {
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let new_document = docs_client.create().await?;
         let document_id = new_document.id();
         new_document.close().await?;
@@ -195,7 +202,7 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         Ok(docs_client.drop_doc(namespace_id).await?)
     }
 
@@ -205,7 +212,7 @@ impl OkuFs {
     ///
     /// A list of all replicas in the file system.
     pub async fn list_replicas(&self) -> Result<Vec<NamespaceId>, Box<dyn Error + Send + Sync>> {
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let replicas = docs_client.list().await?;
         pin_mut!(replicas);
         let replica_ids: Vec<NamespaceId> =
@@ -226,12 +233,12 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
     ) -> Result<Vec<Entry>, Box<dyn Error + Send + Sync>> {
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::sync::store::Query::single_latest_per_key().build();
+        let query = iroh::docs::store::Query::single_latest_per_key().build();
         let entries = document.get_many(query).await?;
         pin_mut!(entries);
         let files: Vec<Entry> = entries.map(|entry| entry.unwrap()).collect().await;
@@ -259,7 +266,7 @@ impl OkuFs {
     ) -> Result<Hash, Box<dyn Error + Send + Sync>> {
         let file_key = path_to_entry_key(path);
         let data_bytes = data.into();
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await?
@@ -288,7 +295,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await?
@@ -314,7 +321,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> Result<Bytes, Box<dyn Error + Send + Sync>> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await?
@@ -370,7 +377,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let path = normalise_path(path).join(""); // Ensure path ends with a slash
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await?
@@ -394,15 +401,17 @@ impl OkuFs {
         &self,
         request: PeerContentRequest,
     ) -> Result<PeerContentResponse, Box<dyn Error + Send + Sync>> {
-        let docs_client = &self.node.docs;
+        let docs_client = &self.node.docs();
         let document = docs_client
             .open(request.namespace_id)
             .await?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         match request.path {
             None => {
-                let document_ticket = document.share(ShareMode::Read).await?;
-                let query = iroh::sync::store::Query::single_latest_per_key().build();
+                let document_ticket = document
+                    .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+                    .await?;
+                let query = iroh::docs::store::Query::single_latest_per_key().build();
                 let entries = document.get_many(query).await?;
                 pin_mut!(entries);
                 let file_sizes: Vec<u64> = entries
@@ -416,9 +425,9 @@ impl OkuFs {
                 })
             }
             Some(blob_path) => {
-                let blobs_client = &self.node.blobs;
+                let blobs_client = &self.node.blobs();
                 let entry_prefix = path_to_entry_key(blob_path);
-                let query = iroh::sync::store::Query::single_latest_per_key()
+                let query = iroh::docs::store::Query::single_latest_per_key()
                     .key_prefix(entry_prefix)
                     .build();
                 let entries = document.get_many(query).await?;
@@ -436,8 +445,8 @@ impl OkuFs {
                     futures::future::try_join_all(entry_hashes_and_sizes.iter().map(|entry| {
                         blobs_client.share(
                             entry.0,
-                            iroh::bytes::BlobFormat::Raw,
-                            iroh::client::ShareTicketOptions::RelayAndAddresses,
+                            iroh::base::hash::BlobFormat::Raw,
+                            iroh::base::node_addr::AddrInfoOptions::RelayAndAddresses,
                         )
                     }))
                     .await?;
@@ -513,7 +522,7 @@ impl OkuFs {
         verified: bool,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let content = ContentRequest::Hash(Hash::new(namespace_id));
-        let dht = mainline::Dht::default();
+        let dht = mainline::Dht::server()?;
         let q = Query {
             content: content.hash_and_format(),
             flags: QueryFlags {
@@ -524,57 +533,61 @@ impl OkuFs {
         let info_hash = to_infohash(q.content);
         let peer_content_request = PeerContentRequest { namespace_id, path };
         let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
-        let docs_client = &self.node.docs;
+        let docs_client = self.node.docs();
 
-        let mut addrs = dht.get_peers(info_hash);
+        let mut addrs = dht.get_peers(info_hash)?;
         for peer_response in &mut addrs {
-            if docs_client.open(namespace_id).await.is_ok() {
-                break;
-            }
-            let peer_content_request_string = peer_content_request_string.clone();
-            let docs_client = docs_client.clone();
-            let self_clone = self.clone();
-            tokio::spawn(async move {
-                let mut stream = TcpStream::connect(peer_response.peer).await?;
-                let mut request = Vec::new();
-                request.write_all(ALPN_DOCUMENT_TICKET_FETCH).await?;
-                request.write_all(b"\n").await?;
-                request
-                    .write_all(peer_content_request_string.as_bytes())
-                    .await?;
-                request.flush().await?;
-                stream.write_all(&request).await?;
-                stream.flush().await?;
-                let mut response_bytes = Vec::new();
-                stream.read_to_end(&mut response_bytes).await?;
-                let response: PeerContentResponse =
-                    serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
-                match response.ticket_response {
-                    PeerTicketResponse::Document(document_ticket) => {
-                        if document_ticket.capability.id() != namespace_id {
-                            return Ok::<(), Box<dyn Error + Send + Sync>>(());
-                        }
-                        // let docs_client = &self.node.docs;
-                        docs_client.import(document_ticket).await?;
-                        Ok::<(), Box<dyn Error + Send + Sync>>(())
-                    }
-                    PeerTicketResponse::Entries(entry_tickets) => {
-                        let blobs_client = &self_clone.node.blobs;
-                        for blob_ticket in entry_tickets {
-                            let ticket_parts = blob_ticket.into_parts();
-                            let blob_download_request = BlobDownloadRequest {
-                                hash: ticket_parts.1,
-                                format: ticket_parts.2,
-                                peer: ticket_parts.0,
-                                tag: iroh::rpc_protocol::SetTagOption::Auto,
-                            };
-                            blobs_client.download(blob_download_request).await?;
-                            break;
-                        }
-                        Ok::<(), Box<dyn Error + Send + Sync>>(())
-                    }
+            for peer in peer_response {
+                if docs_client.open(namespace_id).await.is_ok() {
+                    break;
                 }
-            });
+                let peer_content_request_string = peer_content_request_string.clone();
+                let docs_client = docs_client.clone();
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    let mut stream = TcpStream::connect(peer).await?;
+                    let mut request = Vec::new();
+                    request.write_all(ALPN_DOCUMENT_TICKET_FETCH).await?;
+                    request.write_all(b"\n").await?;
+                    request
+                        .write_all(peer_content_request_string.as_bytes())
+                        .await?;
+                    request.flush().await?;
+                    stream.write_all(&request).await?;
+                    stream.flush().await?;
+                    let mut response_bytes = Vec::new();
+                    stream.read_to_end(&mut response_bytes).await?;
+                    let response: PeerContentResponse =
+                        serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
+                    match response.ticket_response {
+                        PeerTicketResponse::Document(document_ticket) => {
+                            if document_ticket.capability.id() != namespace_id {
+                                return Ok::<(), Box<dyn Error + Send + Sync>>(());
+                            }
+                            // let docs_client = &self.node.docs;
+                            docs_client.import(document_ticket).await?;
+                            Ok::<(), Box<dyn Error + Send + Sync>>(())
+                        }
+                        PeerTicketResponse::Entries(entry_tickets) => {
+                            let blobs_client = &self_clone.node.blobs();
+                            for blob_ticket in entry_tickets {
+                                let ticket_parts = blob_ticket.into_parts();
+                                // let blob_download_request = BlobDownloadRequest {
+                                //     hash: ticket_parts.1,
+                                //     format: ticket_parts.2,
+                                //     peer: ticket_parts.0,
+                                //     tag: iroh::blobs::util::SetTagOption::Auto,
+                                // };
+                                blobs_client
+                                    .download(ticket_parts.1, ticket_parts.0)
+                                    .await?;
+                                // break;
+                            }
+                            Ok::<(), Box<dyn Error + Send + Sync>>(())
+                        }
+                    }
+                });
+            }
         }
 
         Ok(())
@@ -645,7 +658,7 @@ pub fn load_or_create_author() -> Result<Author, Box<dyn Error + Send + Sync>> {
 ///
 /// The configuration of the file system.
 pub fn load_or_create_config() -> Result<OkuFsConfig, Box<dyn Error + Send + Sync>> {
-    let path = PathBuf::from(FS_PATH).join("config");
+    let path = PathBuf::from(FS_PATH).join("config.toml");
     let config_file_contents = std::fs::read_to_string(path.clone());
     match config_file_contents {
         Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml)?),

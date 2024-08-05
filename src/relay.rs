@@ -1,5 +1,5 @@
 use ahash::AHashMap;
-use iroh::sync::NamespaceId;
+use iroh::docs::NamespaceId;
 use lazy_static::lazy_static;
 use oku_fs::{
     discovery::{
