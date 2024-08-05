@@ -7,7 +7,6 @@ use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::BlobTicket;
-use iroh::blobs::downloader::DownloadRequest;
 use iroh::client::docs::Entry;
 use iroh::net::discovery::dns::DnsDiscovery;
 use iroh::net::discovery::pkarr::PkarrPublisher;
