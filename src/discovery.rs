@@ -6,6 +6,7 @@ use iroh::{
     docs::{DocTicket, NamespaceId},
 };
 use iroh_mainline_content_discovery::announce_dht;
+use miette::IntoDiagnostic;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::{collections::BTreeSet, error::Error, str::FromStr, time::Duration};
@@ -27,12 +28,10 @@ pub const ANNOUNCE_PARALLELISM: usize = 10;
 /// # Arguments
 ///
 /// * `namespace_id` - The ID of the replica to announce.
-pub async fn announce_replica(
-    namespace_id: NamespaceId,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn announce_replica(namespace_id: NamespaceId) -> miette::Result<()> {
     let mut content = BTreeSet::new();
     content.insert(HashAndFormat::raw(Hash::new(namespace_id)));
-    let dht = mainline::Dht::server()?;
+    let dht = mainline::Dht::server().into_diagnostic()?;
     let announce_stream = announce_dht(dht, content, DISCOVERY_PORT, ANNOUNCE_PARALLELISM);
     tokio::pin!(announce_stream);
     while let Some((content, res)) = announce_stream.next().await {

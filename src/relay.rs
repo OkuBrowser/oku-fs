@@ -1,6 +1,7 @@
 use ahash::AHashMap;
 use iroh::docs::NamespaceId;
 use lazy_static::lazy_static;
+use miette::IntoDiagnostic;
 use oku_fs::{
     discovery::{
         announce_replica, PeerContentRequest, PeerContentResponse, DISCOVERY_PORT,
@@ -26,7 +27,8 @@ lazy_static! {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> miette::Result<()> {
+    miette::set_panic_hook();
     // Listen for node connections.
     // 1. A node connects to the relay, creating a new thread.
     // 2. The relay receives a list of replicas held by the node.
@@ -95,37 +97,46 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 async fn respond_to_content_request(
     peer_content_request: PeerContentRequest,
-) -> Result<PeerContentResponse, Box<dyn Error + Send + Sync>> {
+) -> miette::Result<PeerContentResponse> {
     let replicas_by_node_reader = REPLICAS_BY_NODE.read().await;
     let replica_ip = replicas_by_node_reader
         .get(&peer_content_request.namespace_id)
         .ok_or(OkuRelayError::CannotSatisfyRequest(
             peer_content_request.namespace_id.to_string(),
         ))?;
-    let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
-    let mut stream = TcpStream::connect(*replica_ip).await?;
+    let peer_content_request_string =
+        serde_json::to_string(&peer_content_request).into_diagnostic()?;
+    let mut stream = TcpStream::connect(*replica_ip).await.into_diagnostic()?;
     let mut request = Vec::new();
-    request.write_all(ALPN_DOCUMENT_TICKET_FETCH).await?;
-    request.write_all(b"\n").await?;
+    request
+        .write_all(ALPN_DOCUMENT_TICKET_FETCH)
+        .await
+        .into_diagnostic()?;
+    request.write_all(b"\n").await.into_diagnostic()?;
     request
         .write_all(peer_content_request_string.as_bytes())
-        .await?;
-    request.flush().await?;
-    stream.write_all(&request).await?;
-    stream.flush().await?;
+        .await
+        .into_diagnostic()?;
+    request.flush().await.into_diagnostic()?;
+    stream.write_all(&request).await.into_diagnostic()?;
+    stream.flush().await.into_diagnostic()?;
     let mut response_bytes = Vec::new();
-    stream.read_to_end(&mut response_bytes).await?;
+    stream
+        .read_to_end(&mut response_bytes)
+        .await
+        .into_diagnostic()?;
     let response: PeerContentResponse =
-        serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
+        serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())
+            .into_diagnostic()?;
     Ok(response)
 }
 
-async fn handle_node_connections() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn handle_node_connections() -> miette::Result<()> {
     let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
-    let listener = TcpListener::bind(socket).await?;
+    let listener = TcpListener::bind(socket).await.into_diagnostic()?;
     loop {
-        let (mut stream, _) = listener.accept().await?;
-        let node_ip = stream.peer_addr()?;
+        let (mut stream, _) = listener.accept().await.into_diagnostic()?;
+        let node_ip = stream.peer_addr().into_diagnostic()?;
         tokio::spawn(async move {
             let mut buf_reader = BufReader::new(&mut stream);
             let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();

@@ -2,7 +2,7 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use iroh::docs::NamespaceId;
 use oku_fs::fs::OkuFs;
-use std::{error::Error, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -65,7 +65,8 @@ enum Commands {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> miette::Result<()> {
+    miette::set_panic_hook();
     let cli = Cli::parse();
     let node = OkuFs::start().await?;
     match cli.command {

@@ -2,7 +2,7 @@ use crate::discovery::{announce_replica, INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY}
 use crate::discovery::{
     PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
 };
-use crate::error::OkuRelayError;
+use crate::error::{OkuDiscoveryError, OkuRelayError};
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
@@ -21,6 +21,7 @@ use iroh::{
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
 // use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
+use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -90,16 +91,32 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn start() -> Result<OkuFs, Box<dyn Error + Send + Sync>> {
+    pub async fn start() -> miette::Result<OkuFs> {
         let node_path = PathBuf::from(FS_PATH).join("node");
-        let node = FsNode::persistent(node_path).await?.spawn().await?;
-        let authors = node.authors().list().await?;
+        let node = FsNode::persistent(node_path)
+            .await
+            .map_err(|_e| OkuFsError::CannotStartNode)?
+            .spawn()
+            .await
+            .map_err(|_e| OkuFsError::CannotStartNode)?;
+        let authors = node
+            .authors()
+            .list()
+            .await
+            .map_err(|_e| OkuFsError::CannotRetrieveAuthors)?;
         futures::pin_mut!(authors);
         let authors_count = authors.as_mut().count().await.to_owned();
         let author_id = if authors_count == 0 {
-            node.authors().create().await?
+            node.authors()
+                .create()
+                .await
+                .map_err(|_e| OkuFsError::AuthorCannotBeCreated)?
         } else {
-            let authors = node.authors().list().await?;
+            let authors = node
+                .authors()
+                .list()
+                .await
+                .map_err(|_e| OkuFsError::CannotRetrieveAuthors)?;
             futures::pin_mut!(authors);
             let authors_list: Vec<AuthorId> = authors.map(|author| author.unwrap()).collect().await;
             authors_list[0]
@@ -110,7 +127,11 @@ impl OkuFs {
             author_id,
             config,
         };
-        let node_addr = oku_fs.node.node_addr().await?;
+        let node_addr = oku_fs
+            .node
+            .node_addr()
+            .await
+            .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
         let addr_info = node_addr.info;
         let magic_endpoint = oku_fs.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
@@ -129,7 +150,7 @@ impl OkuFs {
                 oku_fs_clone
                     .connect_to_relay(relay_address.to_string())
                     .await
-                    .map_err(|e| OkuRelayError::ProblemConnecting(relay_address.to_string()))
+                    .map_err(|_e| OkuRelayError::ProblemConnecting(relay_address.to_string()))
                     .unwrap();
             });
         }
@@ -160,10 +181,12 @@ impl OkuFs {
     /// # Returns
     ///
     /// A discovery service for finding other node's addresses given their IDs.
-    pub async fn create_discovery_service(
-        &self,
-    ) -> Result<ConcurrentDiscovery, Box<dyn Error + Send + Sync>> {
-        let node_addr = self.node.node_addr().await?;
+    pub async fn create_discovery_service(&self) -> miette::Result<ConcurrentDiscovery> {
+        let node_addr = self
+            .node
+            .node_addr()
+            .await
+            .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
         let addr_info = node_addr.info;
         let magic_endpoint = self.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
@@ -177,8 +200,12 @@ impl OkuFs {
     }
 
     /// Shuts down the Oku file system.
-    pub async fn shutdown(self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.node.shutdown().await?)
+    pub async fn shutdown(self) -> miette::Result<()> {
+        Ok(self
+            .node
+            .shutdown()
+            .await
+            .map_err(|_e| OkuFsError::CannotStopNode)?)
     }
 
     /// Creates a new replica in the file system.
@@ -186,11 +213,17 @@ impl OkuFs {
     /// # Returns
     ///
     /// The ID of the new replica, being its public key.
-    pub async fn create_replica(&self) -> Result<NamespaceId, Box<dyn Error + Send + Sync>> {
+    pub async fn create_replica(&self) -> miette::Result<NamespaceId> {
         let docs_client = &self.node.docs();
-        let new_document = docs_client.create().await?;
+        let new_document = docs_client
+            .create()
+            .await
+            .map_err(|_e| OkuFsError::CannotCreateReplica)?;
         let document_id = new_document.id();
-        new_document.close().await?;
+        new_document
+            .close()
+            .await
+            .map_err(|_e| OkuFsError::CannotExitReplica)?;
         Ok(document_id)
     }
 
@@ -199,12 +232,12 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to delete.
-    pub async fn delete_replica(
-        &self,
-        namespace_id: NamespaceId,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn delete_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
         let docs_client = &self.node.docs();
-        Ok(docs_client.drop_doc(namespace_id).await?)
+        Ok(docs_client
+            .drop_doc(namespace_id)
+            .await
+            .map_err(|_e| OkuFsError::CannotDeleteReplica)?)
     }
 
     /// Lists all replicas in the file system.
@@ -212,9 +245,12 @@ impl OkuFs {
     /// # Returns
     ///
     /// A list of all replicas in the file system.
-    pub async fn list_replicas(&self) -> Result<Vec<NamespaceId>, Box<dyn Error + Send + Sync>> {
+    pub async fn list_replicas(&self) -> miette::Result<Vec<NamespaceId>> {
         let docs_client = &self.node.docs();
-        let replicas = docs_client.list().await?;
+        let replicas = docs_client
+            .list()
+            .await
+            .map_err(|_e| OkuFsError::CannotListReplicas)?;
         pin_mut!(replicas);
         let replica_ids: Vec<NamespaceId> =
             replicas.map(|replica| replica.unwrap().0).collect().await;
@@ -230,17 +266,18 @@ impl OkuFs {
     /// # Returns
     ///
     /// A list of all files in the replica.
-    pub async fn list_files(
-        &self,
-        namespace_id: NamespaceId,
-    ) -> Result<Vec<Entry>, Box<dyn Error + Send + Sync>> {
+    pub async fn list_files(&self, namespace_id: NamespaceId) -> miette::Result<Vec<Entry>> {
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = iroh::docs::store::Query::single_latest_per_key().build();
-        let entries = document.get_many(query).await?;
+        let entries = document
+            .get_many(query)
+            .await
+            .map_err(|_e| OkuFsError::CannotListFiles)?;
         pin_mut!(entries);
         let files: Vec<Entry> = entries.map(|entry| entry.unwrap()).collect().await;
         Ok(files)
@@ -264,17 +301,19 @@ impl OkuFs {
         namespace_id: NamespaceId,
         path: PathBuf,
         data: impl Into<Bytes>,
-    ) -> Result<Hash, Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<Hash> {
         let file_key = path_to_entry_key(path);
         let data_bytes = data.into();
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
             .set_bytes(self.author_id, file_key, data_bytes)
-            .await?;
+            .await
+            .map_err(|_e| OkuFsError::CannotCreateOrModifyFile)?;
 
         Ok(entry_hash)
     }
@@ -294,14 +333,18 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
         path: PathBuf,
-    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<usize> {
         let file_key = path_to_entry_key(path);
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let entries_deleted = document.del(self.author_id, file_key).await?;
+        let entries_deleted = document
+            .del(self.author_id, file_key)
+            .await
+            .map_err(|_e| OkuFsError::CannotDeleteFile)?;
         Ok(entries_deleted)
     }
 
@@ -320,18 +363,23 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
         path: PathBuf,
-    ) -> Result<Bytes, Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<Bytes> {
         let file_key = path_to_entry_key(path);
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry = document
             .get_exact(self.author_id, file_key, false)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotReadFile)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        Ok(entry.content_bytes(self.node.client()).await?)
+        Ok(entry
+            .content_bytes(self.node.client())
+            .await
+            .map_err(|_e| OkuFsError::CannotReadFile)?)
     }
 
     /// Moves a file by copying it to a new location and deleting the original.
@@ -352,7 +400,7 @@ impl OkuFs {
         namespace_id: NamespaceId,
         from: PathBuf,
         to: PathBuf,
-    ) -> Result<(Hash, usize), Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<(Hash, usize)> {
         let data = self.read_file(namespace_id, from.clone()).await?;
         let hash = self
             .create_or_modify_file(namespace_id, to.clone(), data)
@@ -376,16 +424,18 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
         path: PathBuf,
-    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<usize> {
         let path = normalise_path(path).join(""); // Ensure path ends with a slash
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entries_deleted = document
             .del(self.author_id, format!("{}", path.display()))
-            .await?;
+            .await
+            .map_err(|_e| OkuFsError::CannotDeleteDirectory)?;
         Ok(entries_deleted)
     }
 
@@ -401,19 +451,24 @@ impl OkuFs {
     pub async fn respond_to_content_request(
         &self,
         request: PeerContentRequest,
-    ) -> Result<PeerContentResponse, Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<PeerContentResponse> {
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(request.namespace_id)
-            .await?
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         match request.path {
             None => {
                 let document_ticket = document
                     .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
-                    .await?;
+                    .await
+                    .map_err(|_e| OkuDiscoveryError::CannotGenerateSharingTicket)?;
                 let query = iroh::docs::store::Query::single_latest_per_key().build();
-                let entries = document.get_many(query).await?;
+                let entries = document
+                    .get_many(query)
+                    .await
+                    .map_err(|_e| OkuFsError::CannotListFiles)?;
                 pin_mut!(entries);
                 let file_sizes: Vec<u64> = entries
                     .map(|entry| entry.unwrap().content_len())
@@ -431,7 +486,10 @@ impl OkuFs {
                 let query = iroh::docs::store::Query::single_latest_per_key()
                     .key_prefix(entry_prefix)
                     .build();
-                let entries = document.get_many(query).await?;
+                let entries = document
+                    .get_many(query)
+                    .await
+                    .map_err(|_e| OkuFsError::CannotListFiles)?;
                 pin_mut!(entries);
                 let entry_hashes_and_sizes: Vec<(Hash, u64)> = entries
                     .map(|entry| {
@@ -450,7 +508,8 @@ impl OkuFs {
                             iroh::base::node_addr::AddrInfoOptions::RelayAndAddresses,
                         )
                     }))
-                    .await?;
+                    .await
+                    .map_err(|_e| OkuDiscoveryError::CannotGenerateSharingTicketForFiles)?;
                 let content_length = entry_hashes_and_sizes
                     .iter()
                     .map(|entry| entry.1)
@@ -467,13 +526,11 @@ impl OkuFs {
 
     /// Handles incoming requests for document tickets.
     /// This function listens for incoming connections from peers and responds to requests for document tickets.
-    pub async fn listen_for_document_ticket_fetch_requests(
-        &self,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn listen_for_document_ticket_fetch_requests(&self) -> miette::Result<()> {
         let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
-        let listener = TcpListener::bind(socket).await?;
+        let listener = TcpListener::bind(socket).await.into_diagnostic()?;
         loop {
-            let (mut stream, _) = listener.accept().await?;
+            let (mut stream, _) = listener.accept().await.into_diagnostic()?;
             let self_clone = self.clone();
             tokio::spawn(async move {
                 let mut buf_reader = BufReader::new(&mut stream);
@@ -521,9 +578,9 @@ impl OkuFs {
         path: Option<PathBuf>,
         partial: bool,
         verified: bool,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> miette::Result<()> {
         let content = ContentRequest::Hash(Hash::new(namespace_id));
-        let dht = mainline::Dht::server()?;
+        let dht = mainline::Dht::server().into_diagnostic()?;
         let q = Query {
             content: content.hash_and_format(),
             flags: QueryFlags {
@@ -533,10 +590,11 @@ impl OkuFs {
         };
         let info_hash = to_infohash(q.content);
         let peer_content_request = PeerContentRequest { namespace_id, path };
-        let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
+        let peer_content_request_string =
+            serde_json::to_string(&peer_content_request).into_diagnostic()?;
         let docs_client = self.node.docs();
 
-        let mut addrs = dht.get_peers(info_hash)?;
+        let mut addrs = dht.get_peers(info_hash).into_diagnostic()?;
         for peer_response in &mut addrs {
             for peer in peer_response {
                 if docs_client.open(namespace_id).await.is_ok() {
@@ -600,29 +658,38 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `relay_address` - The address of the relay to connect to.
-    pub async fn connect_to_relay(
-        &self,
-        relay_address: String,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let relay_addr = relay_address.parse::<SocketAddr>()?;
-        let mut stream = TcpStream::connect(relay_addr).await?;
+    pub async fn connect_to_relay(&self, relay_address: String) -> miette::Result<()> {
+        let relay_addr = relay_address.parse::<SocketAddr>().into_diagnostic()?;
+        let mut stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
         let all_replicas = self.list_replicas().await?;
-        let all_replicas_str = serde_json::to_string(&all_replicas)?;
+        let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;
         let mut request = Vec::new();
-        request.write_all(ALPN_INITIAL_RELAY_CONNECTION).await?;
-        request.write_all(b"\n").await?;
-        request.write_all(all_replicas_str.as_bytes()).await?;
-        request.flush().await?;
-        stream.write_all(&request).await?;
-        stream.flush().await?;
+        request
+            .write_all(ALPN_INITIAL_RELAY_CONNECTION)
+            .await
+            .into_diagnostic()?;
+        request.write_all(b"\n").await.into_diagnostic()?;
+        request
+            .write_all(all_replicas_str.as_bytes())
+            .await
+            .into_diagnostic()?;
+        request.flush().await.into_diagnostic()?;
+        stream.write_all(&request).await.into_diagnostic()?;
+        stream.flush().await.into_diagnostic()?;
         loop {
             let mut response_bytes = Vec::new();
-            stream.read_to_end(&mut response_bytes).await?;
+            stream
+                .read_to_end(&mut response_bytes)
+                .await
+                .into_diagnostic()?;
             if response_bytes == ALPN_RELAY_FETCH {
                 let all_replicas = self.list_replicas().await?;
-                let all_replicas_str = serde_json::to_string(&all_replicas)?;
-                stream.write_all(all_replicas_str.as_bytes()).await?;
-                stream.flush().await?;
+                let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;
+                stream
+                    .write_all(all_replicas_str.as_bytes())
+                    .await
+                    .into_diagnostic()?;
+                stream.flush().await.into_diagnostic()?;
             }
         }
         Ok(())
@@ -638,16 +705,18 @@ impl OkuFs {
 /// # Returns
 ///
 /// The author credentials.
-pub fn load_or_create_author() -> Result<Author, Box<dyn Error + Send + Sync>> {
+pub fn load_or_create_author() -> miette::Result<Author> {
     let path = PathBuf::from(FS_PATH).join("author");
     let author_file = std::fs::read(path.clone());
     match author_file {
-        Ok(bytes) => Ok(Author::from_bytes(&bytes[..32].try_into()?)),
+        Ok(bytes) => Ok(Author::from_bytes(
+            &bytes[..32].try_into().into_diagnostic()?,
+        )),
         Err(_) => {
             let mut rng = OsRng;
             let author = Author::new(&mut rng);
             let author_bytes = author.to_bytes();
-            std::fs::write(path, author_bytes)?;
+            std::fs::write(path, author_bytes).into_diagnostic()?;
             Ok(author)
         }
     }
@@ -658,17 +727,17 @@ pub fn load_or_create_author() -> Result<Author, Box<dyn Error + Send + Sync>> {
 /// # Returns
 ///
 /// The configuration of the file system.
-pub fn load_or_create_config() -> Result<OkuFsConfig, Box<dyn Error + Send + Sync>> {
+pub fn load_or_create_config() -> miette::Result<OkuFsConfig> {
     let path = PathBuf::from(FS_PATH).join("config.toml");
     let config_file_contents = std::fs::read_to_string(path.clone());
     match config_file_contents {
-        Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml)?),
+        Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml).into_diagnostic()?),
         Err(_) => {
             let config = OkuFsConfig {
                 relay_address: None,
             };
-            let config_toml = toml::to_string(&config)?;
-            std::fs::write(path, config_toml)?;
+            let config_toml = toml::to_string(&config).into_diagnostic()?;
+            std::fs::write(path, config_toml).into_diagnostic()?;
             Ok(config)
         }
     }
