@@ -2,7 +2,7 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use iroh::docs::NamespaceId;
 use oku_fs::fs::OkuFs;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -12,54 +12,80 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a new replica.
     CreateReplica,
+    /// Create a new file in a replica.
     CreateFile {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to create the file in.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
+        /// The path of the file to create.
         path: PathBuf,
         #[arg(short, long, value_name = "DATA")]
+        /// The data to write to the file.
         data: Bytes,
     },
+    /// List files in a replica.
     ListFiles {
         #[arg(value_name = "REPLICA_ID")]
+        /// The ID of the replica to list files from.
         replica_id: NamespaceId,
     },
+    /// List local replicas.
     ListReplicas,
+    /// Get the contents of a file in a replica.
     GetFile {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to get the file from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
+        /// The path of the file to get.
         path: PathBuf,
     },
+    /// Remove a file from a replica.
     RemoveFile {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to remove the file from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
+        /// The path of the file to remove.
         path: PathBuf,
     },
+    /// Remove a directory from a replica.
     RemoveDirectory {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to remove the directory from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
+        /// The path to the directory to remove.
         path: PathBuf,
     },
+    /// Remove a replica from the node.
     RemoveReplica {
         #[arg(value_name = "REPLICA_ID")]
+        /// The ID of the replica to remove.
         replica_id: NamespaceId,
     },
+    /// Move a file from one path to another in a replica.
     MoveFile {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to move the file in.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "OLD_PATH")]
+        /// The path of the file to move.
         old_path: PathBuf,
         #[arg(short, long, value_name = "NEW_PATH")]
+        /// The new path of the file.
         new_path: PathBuf,
     },
+    /// Get a replica from another node.
     GetReplica {
         #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to get.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
+        /// The optional path of the directory to get within the replica.
         path: Option<PathBuf>,
     },
 }
@@ -130,7 +156,9 @@ async fn main() -> miette::Result<()> {
         }
         None => {
             println!("Node will listen for incoming connections.");
-            loop {}
+            loop {
+                std::thread::sleep(Duration::from_secs(86400));
+            }
         }
     }
     Ok(())

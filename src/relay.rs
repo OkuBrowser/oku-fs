@@ -13,6 +13,7 @@ use oku_fs::{
 use std::{
     error::Error,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    time::Duration,
 };
 use tokio::{io::AsyncReadExt, net::TcpStream};
 use tokio::{
@@ -92,6 +93,9 @@ async fn main() -> miette::Result<()> {
         }
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     });
+    loop {
+        std::thread::sleep(Duration::from_secs(86400));
+    }
     Ok(())
 }
 
