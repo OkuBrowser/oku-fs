@@ -63,6 +63,21 @@ pub fn path_to_entry_key(path: PathBuf) -> Bytes {
     path_bytes.into()
 }
 
+/// Converts a path to a key prefix for entries in a file system replica.
+///
+/// # Arguments
+///
+/// * `path` - The path to convert to a key prefix.
+///
+/// # Returns
+///
+/// A byte string representing the path, without a null byte at the end.
+pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
+    let path = normalise_path(path.clone());
+    let path_bytes = path.into_os_string().into_encoded_bytes();
+    path_bytes.into()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 ///  The configuration of the file system.
 pub struct OkuFsConfig {
@@ -257,23 +272,36 @@ impl OkuFs {
         Ok(replica_ids)
     }
 
-    /// Lists all files in a replica.
+    /// Lists files in a replica.
     ///
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to list files in.
     ///
+    /// * `path` - An optional path within the replica.
+    ///
     /// # Returns
     ///
-    /// A list of all files in the replica.
-    pub async fn list_files(&self, namespace_id: NamespaceId) -> miette::Result<Vec<Entry>> {
+    /// A list of files in the replica.
+    pub async fn list_files(
+        &self,
+        namespace_id: NamespaceId,
+        path: Option<PathBuf>,
+    ) -> miette::Result<Vec<Entry>> {
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await
             .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::docs::store::Query::single_latest_per_key().build();
+        let query = if let Some(path) = path {
+            let file_key = path_to_entry_prefix(path);
+            iroh::docs::store::Query::single_latest_per_key()
+                .key_prefix(file_key)
+                .build()
+        } else {
+            iroh::docs::store::Query::single_latest_per_key().build()
+        };
         let entries = document
             .get_many(query)
             .await
@@ -371,8 +399,11 @@ impl OkuFs {
             .await
             .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_exact(file_key)
+            .build();
         let entry = document
-            .get_exact(self.author_id, file_key, false)
+            .get_one(query)
             .await
             .map_err(|_e| OkuFsError::CannotReadFile)?
             .ok_or(OkuFsError::FsEntryNotFound)?;

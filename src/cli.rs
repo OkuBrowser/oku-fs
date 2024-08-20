@@ -28,9 +28,12 @@ enum Commands {
     },
     /// List files in a replica.
     ListFiles {
-        #[arg(value_name = "REPLICA_ID")]
+        #[arg(short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to list files from.
         replica_id: NamespaceId,
+        #[arg(short, long, value_name = "PATH", default_missing_value = None)]
+        /// The optional path of the directory to list files from.
+        path: Option<PathBuf>,
     },
     /// List local replicas.
     ListReplicas,
@@ -109,8 +112,8 @@ async fn main() -> miette::Result<()> {
                 .await?;
             println!("Created file at {:?}", path);
         }
-        Some(Commands::ListFiles { replica_id }) => {
-            let files = node.list_files(replica_id).await?;
+        Some(Commands::ListFiles { replica_id, path }) => {
+            let files = node.list_files(replica_id, path).await?;
             for file in files {
                 println!("{:#?}", file);
             }
@@ -147,9 +150,9 @@ async fn main() -> miette::Result<()> {
             println!("Moved file from {:?} to {:?}", old_path, new_path);
         }
         Some(Commands::GetReplica { replica_id, path }) => {
-            node.get_external_replica(replica_id, path, true, true)
+            node.get_external_replica(replica_id, path.clone(), true, true)
                 .await?;
-            let files = node.list_files(replica_id).await?;
+            let files = node.list_files(replica_id, path).await?;
             for file in files {
                 println!("{:#?}", file);
             }
