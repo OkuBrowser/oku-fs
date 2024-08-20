@@ -369,8 +369,16 @@ impl OkuFs {
             .await
             .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_exact(file_key.clone())
+            .build();
+        let entry = document
+            .get_one(query)
+            .await
+            .map_err(|_e| OkuFsError::CannotReadFile)?
+            .ok_or(OkuFsError::FsEntryNotFound)?;
         let entries_deleted = document
-            .del(self.author_id, file_key)
+            .del(entry.author(), file_key)
             .await
             .map_err(|_e| OkuFsError::CannotDeleteFile)?;
         Ok(entries_deleted)
@@ -457,16 +465,32 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<usize> {
         let path = normalise_path(path).join(""); // Ensure path ends with a slash
+        let file_key = path_to_entry_prefix(path);
         let docs_client = &self.node.docs();
         let document = docs_client
             .open(namespace_id)
             .await
             .map_err(|_e| OkuFsError::CannotOpenReplica)?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let entries_deleted = document
-            .del(self.author_id, format!("{}", path.display()))
+        let mut entries_deleted = 0;
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_prefix(file_key)
+            .build();
+        let entries = document
+            .get_many(query)
             .await
-            .map_err(|_e| OkuFsError::CannotDeleteDirectory)?;
+            .map_err(|_e| OkuFsError::CannotListFiles)?;
+        pin_mut!(entries);
+        let files: Vec<Entry> = entries.map(|entry| entry.unwrap()).collect().await;
+        for file in files {
+            entries_deleted += document
+                .del(
+                    file.author(),
+                    format!("{}", std::str::from_utf8(file.key()).unwrap_or_default()),
+                )
+                .await
+                .map_err(|_e| OkuFsError::CannotDeleteDirectory)?;
+        }
         Ok(entries_deleted)
     }
 
