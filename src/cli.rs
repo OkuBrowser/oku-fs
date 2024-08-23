@@ -1,8 +1,11 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use fuse_mt::spawn_mount;
 use iroh::docs::NamespaceId;
+use miette::IntoDiagnostic;
 use oku_fs::fs::OkuFs;
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
+use tokio::runtime::Handle;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -91,13 +94,20 @@ enum Commands {
         /// The optional path of the directory to get within the replica.
         path: Option<PathBuf>,
     },
+    /// Mount the filesystem.
+    Mount {
+        #[arg(value_name = "PATH")]
+        /// The path of the directory to mount the filesystem in.
+        path: PathBuf,
+    },
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> miette::Result<()> {
     miette::set_panic_hook();
     let cli = Cli::parse();
-    let node = OkuFs::start().await?;
+    let handle = Handle::current();
+    let node = OkuFs::start(&handle).await?;
     match cli.command {
         Some(Commands::CreateReplica) => {
             let replica_id = node.create_replica().await?;
@@ -157,11 +167,16 @@ async fn main() -> miette::Result<()> {
                 println!("{:#?}", file);
             }
         }
+        Some(Commands::Mount { path }) => {
+            let mount_handle =
+                spawn_mount(fuse_mt::FuseMT::new(node, 1), path, &[]).into_diagnostic()?;
+            tokio::signal::ctrl_c().await.into_diagnostic()?;
+            mount_handle.join();
+        }
         None => {
             println!("Node will listen for incoming connections.");
-            loop {
-                std::thread::sleep(Duration::from_secs(86400));
-            }
+            tokio::signal::ctrl_c().await.into_diagnostic()?;
+            node.shutdown().await?;
         }
     }
     Ok(())

@@ -25,11 +25,14 @@ use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::{Arc, RwLock};
 use std::{error::Error, path::PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::runtime::Handle;
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
@@ -91,11 +94,15 @@ pub struct OkuFsConfig {
 #[derive(Clone, Debug)]
 pub struct OkuFs {
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
-    node: FsNode,
+    pub(crate) node: FsNode,
     /// The public key of the author of the file system.
-    author_id: AuthorId,
+    pub(crate) author_id: AuthorId,
     /// The configuration of the file system.
-    config: OkuFsConfig,
+    pub(crate) config: OkuFsConfig,
+    /// The handles pointing to paths within the filesystem; used by FUSE.
+    pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,
+    pub(crate) newest_handle: Arc<RwLock<u64>>,
+    pub(crate) handle: Handle,
 }
 
 impl OkuFs {
@@ -106,7 +113,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn start() -> miette::Result<OkuFs> {
+    pub async fn start(handle: &Handle) -> miette::Result<OkuFs> {
         let node_path = PathBuf::from(FS_PATH).join("node");
         let node = FsNode::persistent(node_path)
             .await
@@ -141,6 +148,9 @@ impl OkuFs {
             node,
             author_id,
             config,
+            fs_handles: Arc::new(RwLock::new(HashMap::new())),
+            newest_handle: Arc::new(RwLock::new(0)),
+            handle: handle.clone(),
         };
         let node_addr = oku_fs
             .node
@@ -384,6 +394,65 @@ impl OkuFs {
         Ok(entries_deleted)
     }
 
+    /// Gets an Iroh entry for a file.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the file.
+    ///
+    /// * `path` - The path of the file.
+    ///
+    /// # Returns
+    ///
+    /// The entry representing the file.
+    pub async fn get_entry(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+    ) -> miette::Result<Entry> {
+        let file_key = path_to_entry_key(path);
+        let docs_client = &self.node.docs();
+        let document = docs_client
+            .open(namespace_id)
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .ok_or(OkuFsError::FsEntryNotFound)?;
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_exact(file_key)
+            .build();
+        let entry = document
+            .get_one(query)
+            .await
+            .map_err(|_e| OkuFsError::CannotReadFile)?
+            .ok_or(OkuFsError::FsEntryNotFound)?;
+        Ok(entry)
+    }
+
+    pub async fn get_oldest_entry_timestamp(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+    ) -> miette::Result<u64> {
+        let file_key = path_to_entry_key(path);
+        let docs_client = &self.node.docs();
+        let document = docs_client
+            .open(namespace_id)
+            .await
+            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .ok_or(OkuFsError::FsEntryNotFound)?;
+        let query = iroh::docs::store::Query::all().key_exact(file_key).build();
+        let entries = document
+            .get_many(query)
+            .await
+            .map_err(|_e| OkuFsError::CannotListFiles)?;
+        pin_mut!(entries);
+        let timestamps: Vec<u64> = entries
+            .map(|entry| entry.unwrap().timestamp())
+            .collect()
+            .await;
+        Ok(*timestamps.iter().min().unwrap_or(&u64::MAX))
+    }
+
     /// Reads a file.
     ///
     /// # Arguments
@@ -400,21 +469,7 @@ impl OkuFs {
         namespace_id: NamespaceId,
         path: PathBuf,
     ) -> miette::Result<Bytes> {
-        let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs();
-        let document = docs_client
-            .open(namespace_id)
-            .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
-            .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::docs::store::Query::single_latest_per_key()
-            .key_exact(file_key)
-            .build();
-        let entry = document
-            .get_one(query)
-            .await
-            .map_err(|_e| OkuFsError::CannotReadFile)?
-            .ok_or(OkuFsError::FsEntryNotFound)?;
+        let entry = self.get_entry(namespace_id, path).await?;
         Ok(entry
             .content_bytes(self.node.client())
             .await

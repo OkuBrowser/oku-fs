@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -106,4 +108,25 @@ pub enum OkuRelayError {
     #[diagnostic(code(relay::problem_connecting), url(docsrs))]
     /// Problem connecting to node.
     ProblemConnecting(String),
+}
+
+#[derive(Error, Debug, Diagnostic)]
+/// FUSE errors.
+pub enum OkuFuseError {
+    #[error("No root in path.")]
+    #[diagnostic(code(fuse::no_root), url(docsrs))]
+    /// No root in path.
+    NoRoot,
+    #[error("No file at path {0:?}.")]
+    #[diagnostic(code(fuse::no_file_at_path), url(docsrs))]
+    /// No file at path.
+    NoFileAtPath(PathBuf),
+    #[error("Could not update filesystem handles.")]
+    #[diagnostic(code(fuse::fs_handles_failed_update), url(docsrs))]
+    /// Could not update filesystem handles.
+    FsHandlesFailedUpdate,
+    #[error("No file with handle {0}.")]
+    #[diagnostic(code(fuse::no_file_with_handle), url(docsrs))]
+    /// No file with handle.
+    NoFileWithHandle(u64),
 }

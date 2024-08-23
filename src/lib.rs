@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-// #![feature(doc_auto_cfg)]
+#![feature(doc_auto_cfg)]
 #![warn(missing_docs)]
 
 /// Content discovery and retrieval.
@@ -8,3 +8,5 @@ pub mod discovery;
 pub mod error;
 /// An instance of an Oku file system.
 pub mod fs;
+/// FUSE implementation.
+pub mod fuse;
