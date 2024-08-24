@@ -22,6 +22,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
+use tracing::debug;
+use tracing::error;
+use tracing::trace;
 
 /// Parse a FUSE path to retrieve the replica and path.
 ///
@@ -165,9 +168,9 @@ impl OkuFs {
                         size: file_entry.content_len(),
                         blocks: 0,
                         atime: SystemTime::now(),
-                        mtime: SystemTime::from(
-                            chrono::Utc.timestamp_nanos(file_entry.timestamp() as i64),
-                        ),
+                        mtime: SystemTime::from(chrono::Utc.timestamp_nanos(
+                            (file_entry.timestamp() * 1000).try_into().unwrap_or(0),
+                        )),
                         ctime: estimated_creation_time,
                         crtime: estimated_creation_time,
                         kind: fs_entry_type,
@@ -180,14 +183,41 @@ impl OkuFs {
                     })
                 }
                 fuse_mt::FileType::Directory => {
-                    // TODO: Actually determine times, size for directories
+                    let directory_creation_time_estimate = self
+                        .get_oldest_timestamp_in_folder(namespace_id, replica_path.clone())
+                        .await?;
+                    let directory_modification_time_estimate = self
+                        .get_newest_timestamp_in_folder(namespace_id, replica_path.clone())
+                        .await?;
+                    let directory_size_estimate = self
+                        .get_folder_size(namespace_id, replica_path.clone())
+                        .await?;
+                    // TODO: Actually determine size, permissions for directories
                     Ok(FileAttr {
-                        size: 0,
+                        size: directory_size_estimate,
                         blocks: 0,
                         atime: SystemTime::now(),
-                        mtime: SystemTime::now(),
-                        ctime: SystemTime::now(),
-                        crtime: SystemTime::now(),
+                        mtime: SystemTime::from(
+                            chrono::Utc.timestamp_nanos(
+                                (directory_modification_time_estimate * 1000)
+                                    .try_into()
+                                    .unwrap_or(0),
+                            ),
+                        ),
+                        ctime: SystemTime::from(
+                            chrono::Utc.timestamp_nanos(
+                                (directory_creation_time_estimate * 1000)
+                                    .try_into()
+                                    .unwrap_or(0),
+                            ),
+                        ),
+                        crtime: SystemTime::from(
+                            chrono::Utc.timestamp_nanos(
+                                (directory_creation_time_estimate * 1000)
+                                    .try_into()
+                                    .unwrap_or(0),
+                            ),
+                        ),
                         kind: fuse_mt::FileType::Directory,
                         perm: 0,
                         nlink: 0,
@@ -201,14 +231,27 @@ impl OkuFs {
             }
         } else {
             if path.to_path_buf() == PathBuf::from("/") {
-                // TODO: Actually determine times, size for root directory
+                let root_creation_time_estimate = self.get_oldest_timestamp().await?;
+                let root_modification_time_estimate = self.get_newest_timestamp().await?;
+                let root_size_estimate = self.get_size().await?;
+                // TODO: Actually determine size for root directory
                 Ok(FileAttr {
-                    size: 0,
+                    size: root_size_estimate,
                     blocks: 0,
                     atime: SystemTime::now(),
-                    mtime: SystemTime::now(),
-                    ctime: SystemTime::now(),
-                    crtime: SystemTime::now(),
+                    mtime: SystemTime::from(
+                        chrono::Utc.timestamp_nanos(
+                            (root_modification_time_estimate * 1000)
+                                .try_into()
+                                .unwrap_or(0),
+                        ),
+                    ),
+                    ctime: SystemTime::from(chrono::Utc.timestamp_nanos(
+                        (root_creation_time_estimate * 1000).try_into().unwrap_or(0),
+                    )),
+                    crtime: SystemTime::from(chrono::Utc.timestamp_nanos(
+                        (root_creation_time_estimate * 1000).try_into().unwrap_or(0),
+                    )),
                     kind: fuse_mt::FileType::Directory,
                     perm: 0,
                     nlink: 0,
@@ -226,7 +269,7 @@ impl OkuFs {
 
 impl FilesystemMT for OkuFs {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
-        println!("init() called");
+        trace!("init() called");
         return Ok(());
     }
 
@@ -237,7 +280,7 @@ impl FilesystemMT for OkuFs {
     }
 
     fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
-        println!("[getattr] path = {:?}, fh = {:?}", path, fh);
+        debug!("[getattr] path = {:?}, fh = {:?}", path, fh);
         // Potential improvement: spawn a new thread to block on.
         let fs_entry_attr_result = self
             .handle
@@ -245,18 +288,18 @@ impl FilesystemMT for OkuFs {
         match fs_entry_attr_result {
             Ok(fs_entry_attr) => Ok((std::time::Duration::from_secs(1), fs_entry_attr)),
             Err(e) => {
-                eprintln!("[getattr]: {}", e);
+                error!("[getattr]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        println!("[open] path = {:?}, flags = {}", path, flags);
+        debug!("[open] path = {:?}, flags = {}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
             Err(e) => {
-                eprintln!("[open]: {}", e);
+                error!("[open]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
@@ -271,7 +314,7 @@ impl FilesystemMT for OkuFs {
         size: u32,
         callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
     ) -> CallbackResult {
-        println!(
+        debug!(
             "[read] path = {:?}, fh = {}, offset = {}, size = {}",
             path, fh, offset, size
         );
@@ -297,13 +340,13 @@ impl FilesystemMT for OkuFs {
                             }
                         }
                         Err(e) => {
-                            eprintln!("[read]: {}", e);
+                            error!("[read]: {}", e);
                             callback(Err(libc::ENOSYS))
                         }
                     }
                 }
                 None => {
-                    eprintln!(
+                    error!(
                         "[read] failed on: path = {:?}, fh = {}, offset = {}, size = {}",
                         path, fh, offset, size
                     );
@@ -311,14 +354,14 @@ impl FilesystemMT for OkuFs {
                 }
             },
             Err(e) => {
-                eprintln!("[read]: {}", e);
+                error!("[read]: {}", e);
                 callback(Err(libc::ENOSYS))
             }
         }
     }
 
     fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
-        println!("[flush] path = {:?}, fh = {}", path, fh);
+        debug!("[flush] path = {:?}, fh = {}", path, fh);
         return Ok(());
     }
 
@@ -331,7 +374,7 @@ impl FilesystemMT for OkuFs {
         _lock_owner: u64,
         _flush: bool,
     ) -> ResultEmpty {
-        println!(
+        debug!(
             "[release] path = {:?}, fh = {}, flags = {}",
             path, fh, flags
         );
@@ -339,25 +382,25 @@ impl FilesystemMT for OkuFs {
         match self.remove_fs_handle(fh) {
             Ok(_path) => Ok(()),
             Err(e) => {
-                eprintln!("[release]: {}", e);
+                error!("[release]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
     }
 
     fn opendir(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        println!("[opendir] path = {:?}, flags = {}", path, flags);
+        debug!("[opendir] path = {:?}, flags = {}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
             Err(e) => {
-                eprintln!("[opendir]: {}", e);
+                error!("[opendir]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
     }
 
     fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
-        println!("[readdir] path = {:?}, fh = {}", path, fh);
+        debug!("[readdir] path = {:?}, fh = {}", path, fh);
 
         let mut directory_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
@@ -383,12 +426,12 @@ impl FilesystemMT for OkuFs {
                                 Ok(directory_entries)
                             }
                             Err(e) => {
-                                eprintln!("[readdir]: {}", e);
+                                error!("[readdir]: {}", e);
                                 Err(libc::ENOSYS)
                             }
                         },
                         Err(e) => {
-                            eprintln!("[readdir]: {}", e);
+                            error!("[readdir]: {}", e);
                             Err(libc::ENOSYS)
                         }
                     }
@@ -407,21 +450,21 @@ impl FilesystemMT for OkuFs {
                             Ok(directory_entries)
                         }
                         Err(e) => {
-                            eprintln!("[readdir]: {}", e);
+                            error!("[readdir]: {}", e);
                             Err(libc::ENOSYS)
                         }
                     }
                 }
             },
             Err(e) => {
-                eprintln!("[readdir]: {}", e);
+                error!("[readdir]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
     }
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, flags: u32) -> ResultEmpty {
-        println!(
+        debug!(
             "[releasedir] path = {:?}, fh = {}, flags = {}",
             path, fh, flags
         );
@@ -429,14 +472,14 @@ impl FilesystemMT for OkuFs {
         match self.remove_fs_handle(fh) {
             Ok(_path) => Ok(()),
             Err(e) => {
-                eprintln!("[releasedir]: {}", e);
+                error!("[releasedir]: {}", e);
                 Err(libc::ENOSYS)
             }
         }
     }
 
     fn statfs(&self, _req: RequestInfo, path: &Path) -> ResultStatfs {
-        println!("[statfs] path = {:?}", path);
+        debug!("[statfs] path = {:?}", path);
 
         let file_count = self.handle.block_on(async {
             let mut file_count = 0u64;

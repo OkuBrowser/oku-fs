@@ -25,13 +25,17 @@ use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::str::FromStr;
+#[cfg(feature = "fuse")]
 use std::sync::{Arc, RwLock};
 use std::{error::Error, path::PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+#[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 
 /// The path on disk where the file system is stored.
@@ -100,8 +104,11 @@ pub struct OkuFs {
     /// The configuration of the file system.
     pub(crate) config: OkuFsConfig,
     /// The handles pointing to paths within the filesystem; used by FUSE.
+    #[cfg(feature = "fuse")]
     pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,
+    #[cfg(feature = "fuse")]
     pub(crate) newest_handle: Arc<RwLock<u64>>,
+    #[cfg(feature = "fuse")]
     pub(crate) handle: Handle,
 }
 
@@ -113,7 +120,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn start(handle: &Handle) -> miette::Result<OkuFs> {
+    pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<OkuFs> {
         let node_path = PathBuf::from(FS_PATH).join("node");
         let node = FsNode::persistent(node_path)
             .await
@@ -148,8 +155,11 @@ impl OkuFs {
             node,
             author_id,
             config,
+            #[cfg(feature = "fuse")]
             fs_handles: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(feature = "fuse")]
             newest_handle: Arc::new(RwLock::new(0)),
+            #[cfg(feature = "fuse")]
             handle: handle.clone(),
         };
         let node_addr = oku_fs
@@ -452,7 +462,86 @@ impl OkuFs {
             .map(|entry| entry.unwrap().timestamp())
             .collect()
             .await;
-        Ok(*timestamps.iter().min().unwrap_or(&u64::MAX))
+        Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
+    }
+
+    pub async fn get_oldest_timestamp_in_folder(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+    ) -> miette::Result<u64> {
+        let files = self.list_files(namespace_id, Some(path)).await?;
+        let mut timestamps: Vec<u64> = Vec::new();
+        for file in files {
+            timestamps.push(
+                self.get_oldest_entry_timestamp(
+                    namespace_id,
+                    PathBuf::from_str(std::str::from_utf8(file.key()).into_diagnostic()?)
+                        .into_diagnostic()?,
+                )
+                .await?,
+            );
+        }
+        Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
+    }
+
+    pub async fn get_oldest_timestamp(&self) -> miette::Result<u64> {
+        let replicas = self.list_replicas().await?;
+        let mut timestamps: Vec<u64> = Vec::new();
+        for replica in replicas {
+            timestamps.push(
+                self.get_oldest_timestamp_in_folder(replica, PathBuf::from("/"))
+                    .await?,
+            );
+        }
+        Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
+    }
+
+    pub async fn get_newest_timestamp_in_folder(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+    ) -> miette::Result<u64> {
+        let files = self.list_files(namespace_id, Some(path)).await?;
+        let mut timestamps: Vec<u64> = Vec::new();
+        for file in files {
+            timestamps.push(file.timestamp());
+        }
+        Ok(*timestamps.iter().max().unwrap_or(&u64::MIN))
+    }
+
+    pub async fn get_newest_timestamp(&self) -> miette::Result<u64> {
+        let replicas = self.list_replicas().await?;
+        let mut timestamps: Vec<u64> = Vec::new();
+        for replica in replicas {
+            timestamps.push(
+                self.get_newest_timestamp_in_folder(replica, PathBuf::from("/"))
+                    .await?,
+            );
+        }
+        Ok(*timestamps.iter().max().unwrap_or(&u64::MIN))
+    }
+
+    pub async fn get_folder_size(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+    ) -> miette::Result<u64> {
+        let files = self.list_files(namespace_id, Some(path)).await?;
+        let mut size = 0;
+        for file in files {
+            size += file.content_len();
+        }
+        Ok(size)
+    }
+
+    pub async fn get_size(&self) -> miette::Result<u64> {
+        let replicas = self.list_replicas().await?;
+        let mut size = 0;
+        for replica in replicas {
+            size += self.get_folder_size(replica, PathBuf::from("/")).await?;
+        }
+        Ok(size)
     }
 
     /// Reads a file.

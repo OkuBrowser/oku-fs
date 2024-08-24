@@ -1,11 +1,15 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+#[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
 use iroh::docs::NamespaceId;
 use miette::IntoDiagnostic;
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;
+#[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
+#[cfg(feature = "fuse")]
+use tracing::Level;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -95,10 +99,14 @@ enum Commands {
         path: Option<PathBuf>,
     },
     /// Mount the filesystem.
+    #[cfg(feature = "fuse")]
     Mount {
         #[arg(value_name = "PATH")]
         /// The path of the directory to mount the filesystem in.
         path: PathBuf,
+        /// The level of log output; warnings, information, debugging messages, and trace logs.
+        #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0)]
+        verbosity: u8,
     },
 }
 
@@ -106,8 +114,14 @@ enum Commands {
 async fn main() -> miette::Result<()> {
     miette::set_panic_hook();
     let cli = Cli::parse();
-    let handle = Handle::current();
-    let node = OkuFs::start(&handle).await?;
+    cfg_if::cfg_if! {
+        if #[cfg(any(feature = "fuse"))] {
+            let handle = Handle::current();
+            let node = OkuFs::start(&handle).await?;
+        } else {
+            let node = OkuFs::start().await?;
+        }
+    };
     match cli.command {
         Some(Commands::CreateReplica) => {
             let replica_id = node.create_replica().await?;
@@ -167,7 +181,31 @@ async fn main() -> miette::Result<()> {
                 println!("{:#?}", file);
             }
         }
-        Some(Commands::Mount { path }) => {
+        #[cfg(feature = "fuse")]
+        Some(Commands::Mount { path, verbosity }) => {
+            let verbosity_level = match verbosity {
+                0 => Level::ERROR,
+                1 => Level::WARN,
+                2 => Level::INFO,
+                3 => Level::DEBUG,
+                4 => Level::TRACE,
+                _ => Level::TRACE,
+            };
+            let mut subscriber_builder = tracing_subscriber::fmt()
+                .with_env_filter("oku-fs")
+                .pretty()
+                .with_max_level(verbosity_level)
+                .with_file(false)
+                .with_line_number(false);
+            if verbosity >= 3 {
+                subscriber_builder = subscriber_builder
+                    .with_thread_ids(true)
+                    .with_thread_names(true)
+                    .with_file(true)
+                    .with_line_number(true);
+            }
+            subscriber_builder.init();
+
             let mount_handle =
                 spawn_mount(fuse_mt::FuseMT::new(node, 1), path, &[]).into_diagnostic()?;
             tokio::signal::ctrl_c().await.into_diagnostic()?;
