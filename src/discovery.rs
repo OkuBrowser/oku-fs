@@ -10,6 +10,7 @@ use miette::IntoDiagnostic;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::{collections::BTreeSet, error::Error, str::FromStr, time::Duration};
+use tracing::error;
 
 /// The delay between republishing content to the mainline DHT.
 pub const REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);
@@ -37,7 +38,7 @@ pub async fn announce_replica(namespace_id: NamespaceId) -> miette::Result<()> {
     while let Some((content, res)) = announce_stream.next().await {
         match res {
             Ok(_) => {}
-            Err(e) => eprintln!(
+            Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(content.to_string(), e.to_string())
             ),

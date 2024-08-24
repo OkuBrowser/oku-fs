@@ -2626,6 +2626,7 @@ dependencies = [
  "clap",
  "derive_more",
  "fuse_mt",
+ "fuser",
  "futures",
  "iroh",
  "iroh-mainline-content-discovery",

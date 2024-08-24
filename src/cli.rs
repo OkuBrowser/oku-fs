@@ -1,21 +1,21 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-#[cfg(feature = "fuse")]
-use fuse_mt::spawn_mount;
 use iroh::docs::NamespaceId;
 use miette::IntoDiagnostic;
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
-#[cfg(feature = "fuse")]
-use tracing::Level;
+use tracing::{info, Level};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+    /// The level of log output; warnings, information, debugging messages, and trace logs.
+    #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0, global = true)]
+    verbosity: u8,
 }
 #[derive(Subcommand)]
 enum Commands {
@@ -104,9 +104,6 @@ enum Commands {
         #[arg(value_name = "PATH")]
         /// The path of the directory to mount the filesystem in.
         path: PathBuf,
-        /// The level of log output; warnings, information, debugging messages, and trace logs.
-        #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0)]
-        verbosity: u8,
     },
 }
 
@@ -122,10 +119,34 @@ async fn main() -> miette::Result<()> {
             let node = OkuFs::start().await?;
         }
     };
+
+    let verbosity_level = match cli.verbosity {
+        0 => Level::ERROR,
+        1 => Level::WARN,
+        2 => Level::INFO,
+        3 => Level::DEBUG,
+        4 => Level::TRACE,
+        _ => Level::TRACE,
+    };
+    let mut subscriber_builder = tracing_subscriber::fmt()
+        .with_env_filter("oku-fs")
+        .pretty()
+        .with_max_level(verbosity_level)
+        .with_file(false)
+        .with_line_number(false);
+    if cli.verbosity >= 3 {
+        subscriber_builder = subscriber_builder
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_file(true)
+            .with_line_number(true);
+    }
+    subscriber_builder.init();
+
     match cli.command {
         Some(Commands::CreateReplica) => {
             let replica_id = node.create_replica().await?;
-            println!("Created replica with ID: {}", replica_id);
+            info!("Created replica with ID: {}", replica_id);
         }
         Some(Commands::CreateFile {
             replica_id,
@@ -134,19 +155,15 @@ async fn main() -> miette::Result<()> {
         }) => {
             node.create_or_modify_file(replica_id, path.clone(), data)
                 .await?;
-            println!("Created file at {:?}", path);
+            info!("Created file at {:?}", path);
         }
         Some(Commands::ListFiles { replica_id, path }) => {
             let files = node.list_files(replica_id, path).await?;
-            for file in files {
-                println!("{:#?}", file);
-            }
+            println!("Files: {:#?}", files);
         }
         Some(Commands::ListReplicas) => {
             let replicas = node.list_replicas().await?;
-            for replica in replicas {
-                println!("{}", replica);
-            }
+            println!("Replicas: {:#?}", replicas);
         }
         Some(Commands::GetFile { replica_id, path }) => {
             let data = node.read_file(replica_id, path).await?;
@@ -154,15 +171,15 @@ async fn main() -> miette::Result<()> {
         }
         Some(Commands::RemoveFile { replica_id, path }) => {
             node.delete_file(replica_id, path.clone()).await?;
-            println!("Removed file at {:?}", path);
+            info!("Removed file at {:?}", path);
         }
         Some(Commands::RemoveDirectory { replica_id, path }) => {
             node.delete_directory(replica_id, path.clone()).await?;
-            println!("Removed directory at {:?}", path);
+            info!("Removed directory at {:?}", path);
         }
         Some(Commands::RemoveReplica { replica_id }) => {
             node.delete_replica(replica_id).await?;
-            println!("Removed replica with ID: {}", replica_id);
+            info!("Removed replica with ID: {}", replica_id);
         }
         Some(Commands::MoveFile {
             replica_id,
@@ -171,48 +188,23 @@ async fn main() -> miette::Result<()> {
         }) => {
             node.move_file(replica_id, old_path.clone(), new_path.clone())
                 .await?;
-            println!("Moved file from {:?} to {:?}", old_path, new_path);
+            info!("Moved file from {:?} to {:?}", old_path, new_path);
         }
         Some(Commands::GetReplica { replica_id, path }) => {
             node.get_external_replica(replica_id, path.clone(), true, true)
                 .await?;
             let files = node.list_files(replica_id, path).await?;
-            for file in files {
-                println!("{:#?}", file);
-            }
+            println!("Files: {:#?}", files);
         }
         #[cfg(feature = "fuse")]
-        Some(Commands::Mount { path, verbosity }) => {
-            let verbosity_level = match verbosity {
-                0 => Level::ERROR,
-                1 => Level::WARN,
-                2 => Level::INFO,
-                3 => Level::DEBUG,
-                4 => Level::TRACE,
-                _ => Level::TRACE,
-            };
-            let mut subscriber_builder = tracing_subscriber::fmt()
-                .with_env_filter("oku-fs")
-                .pretty()
-                .with_max_level(verbosity_level)
-                .with_file(false)
-                .with_line_number(false);
-            if verbosity >= 3 {
-                subscriber_builder = subscriber_builder
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .with_file(true)
-                    .with_line_number(true);
-            }
-            subscriber_builder.init();
-
-            let mount_handle =
-                spawn_mount(fuse_mt::FuseMT::new(node, 1), path, &[]).into_diagnostic()?;
+        Some(Commands::Mount { path }) => {
+            info!("Node will listen for incoming connections.");
+            let mount_handle = node.mount(path)?;
             tokio::signal::ctrl_c().await.into_diagnostic()?;
             mount_handle.join();
         }
         None => {
-            println!("Node will listen for incoming connections.");
+            info!("Node will listen for incoming connections.");
             tokio::signal::ctrl_c().await.into_diagnostic()?;
             node.shutdown().await?;
         }

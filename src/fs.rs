@@ -21,6 +21,8 @@ use iroh::{
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
 // use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
+#[cfg(feature = "fuse")]
+use fuse_mt::spawn_mount;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
@@ -638,6 +640,11 @@ impl OkuFs {
                 .map_err(|_e| OkuFsError::CannotDeleteDirectory)?;
         }
         Ok(entries_deleted)
+    }
+
+    #[cfg(feature = "fuse")]
+    pub fn mount(&self, path: PathBuf) -> miette::Result<fuser::BackgroundSession> {
+        Ok(spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()?)
     }
 
     /// Respond to requests for content from peers.
