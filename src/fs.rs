@@ -154,6 +154,7 @@ impl OkuFs {
         };
         let node_addr = oku_fs
             .node
+            .net()
             .node_addr()
             .await
             .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
@@ -209,6 +210,7 @@ impl OkuFs {
     pub async fn create_discovery_service(&self) -> miette::Result<ConcurrentDiscovery> {
         let node_addr = self
             .node
+            .net()
             .node_addr()
             .await
             .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
