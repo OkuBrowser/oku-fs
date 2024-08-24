@@ -13,7 +13,11 @@ use fuse_mt::ResultReaddir;
 use fuse_mt::ResultSlice;
 use fuse_mt::ResultStatfs;
 use fuse_mt::Statfs;
+use iroh::client::docs::Entry;
 use iroh::docs::NamespaceId;
+use miette::IntoDiagnostic;
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -32,9 +36,9 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
     let mut components = path.components();
     if let Some(_root) = components.next() {
         if let Some(replica_id) = components.next() {
-            let namespace_id =
-                NamespaceId::from_str(replica_id.as_os_str().to_str().unwrap_or_default())
-                    .map_err(|_e| OkuFuseError::NoRoot)?;
+            let replica_id_string = replica_id.as_os_str().to_str().unwrap_or_default();
+            let namespace_id = NamespaceId::from_str(replica_id_string)
+                .map_err(|_e| OkuFuseError::NoReplica(replica_id_string.to_string()))?;
             let replica_path = components.as_path().to_path_buf();
             return Ok(Some((namespace_id, replica_path)));
         } else {
@@ -42,6 +46,54 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
         }
     }
     Err(OkuFuseError::NoRoot.into())
+}
+
+pub fn get_immediate_children(
+    prefix_path: PathBuf,
+    files: Vec<Entry>,
+) -> miette::Result<Vec<DirectoryEntry>> {
+    let prefix_path = prefix_path.join(Path::new("/"));
+    let mut directory_set: HashSet<OsString> = HashSet::new();
+    let mut directory_entries: Vec<DirectoryEntry> = vec![
+        DirectoryEntry {
+            name: std::ffi::OsString::from("."),
+            kind: fuse_mt::FileType::Directory,
+        },
+        DirectoryEntry {
+            name: std::ffi::OsString::from(".."),
+            kind: fuse_mt::FileType::Directory,
+        },
+    ];
+    // For all descending files …
+    for file in files {
+        let file_path = PathBuf::from(std::str::from_utf8(file.key()).unwrap_or_default());
+        let stripped_file_path = file_path
+            .strip_prefix(prefix_path.clone())
+            .into_diagnostic()?;
+        let number_of_components = stripped_file_path.components().count();
+        if let Some(first_component) = stripped_file_path.components().next() {
+            // Check if this file is a direct child of the prefix path
+            // If the file isn't a direct child, it must be in a folder under the prefix path
+            if number_of_components == 1 {
+                directory_entries.push(DirectoryEntry {
+                    name: stripped_file_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_os_string(),
+                    kind: fuse_mt::FileType::RegularFile,
+                })
+            } else {
+                directory_set.insert(first_component.as_os_str().to_os_string());
+            }
+        }
+    }
+    for directory in directory_set {
+        directory_entries.push(DirectoryEntry {
+            name: directory,
+            kind: fuse_mt::FileType::Directory,
+        })
+    }
+    Ok(directory_entries)
 }
 
 impl OkuFs {
@@ -73,41 +125,101 @@ impl OkuFs {
             Err(_e) => Err(OkuFuseError::FsHandlesFailedUpdate.into()),
         }
     }
-    // pub async fn get_file_entry(&self, path: &Path) -> miette::Result<Entry> {
-    //     let parsed_path = parse_fuse_path(path)?;
-    //     if let Some((namespace_id, replica_path)) = parsed_path {
-    //         Ok(self.get_entry(namespace_id, replica_path.clone()).await?)
-    //     } else {
-    //         Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
-    //     }
-    // }
-    pub async fn get_file_attributes(&self, path: &Path) -> miette::Result<FileAttr> {
+    pub async fn is_file_or_directory(&self, path: &Path) -> miette::Result<fuse_mt::FileType> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
-            let file_entry = self.get_entry(namespace_id, replica_path.clone()).await?;
-            let estimated_creation_time = SystemTime::from(
-                chrono::Utc.timestamp_nanos(
-                    self.get_oldest_entry_timestamp(namespace_id, replica_path)
-                        .await? as i64,
-                ),
-            );
-            Ok(FileAttr {
-                size: file_entry.content_len(),
-                blocks: 0,
-                atime: SystemTime::now(),
-                mtime: SystemTime::from(chrono::Utc.timestamp_nanos(file_entry.timestamp() as i64)),
-                ctime: estimated_creation_time,
-                crtime: estimated_creation_time,
-                kind: fuse_mt::FileType::RegularFile,
-                perm: 0,
-                nlink: 0,
-                uid: 0,
-                gid: 0,
-                rdev: 0,
-                flags: 0,
-            })
+            if self
+                .get_entry(namespace_id, replica_path.clone())
+                .await
+                .is_ok()
+            {
+                Ok(fuse_mt::FileType::RegularFile)
+            } else if self
+                .list_files(namespace_id, Some(replica_path))
+                .await
+                .is_ok()
+            {
+                Ok(fuse_mt::FileType::Directory)
+            } else {
+                Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
+            }
         } else {
-            Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
+            Ok(fuse_mt::FileType::Directory)
+        }
+    }
+    pub async fn get_fs_entry_attributes(&self, path: &Path) -> miette::Result<FileAttr> {
+        let parsed_path = parse_fuse_path(path)?;
+        if let Some((namespace_id, replica_path)) = parsed_path {
+            let fs_entry_type = self.is_file_or_directory(path).await?;
+            match fs_entry_type {
+                fuse_mt::FileType::RegularFile => {
+                    let file_entry = self.get_entry(namespace_id, replica_path.clone()).await?;
+                    let estimated_creation_time = SystemTime::from(
+                        chrono::Utc.timestamp_nanos(
+                            self.get_oldest_entry_timestamp(namespace_id, replica_path)
+                                .await? as i64,
+                        ),
+                    );
+                    // TODO: Actually determine permissions
+                    Ok(FileAttr {
+                        size: file_entry.content_len(),
+                        blocks: 0,
+                        atime: SystemTime::now(),
+                        mtime: SystemTime::from(
+                            chrono::Utc.timestamp_nanos(file_entry.timestamp() as i64),
+                        ),
+                        ctime: estimated_creation_time,
+                        crtime: estimated_creation_time,
+                        kind: fs_entry_type,
+                        perm: 0,
+                        nlink: 0,
+                        uid: 0,
+                        gid: 0,
+                        rdev: 0,
+                        flags: 0,
+                    })
+                }
+                fuse_mt::FileType::Directory => {
+                    // TODO: Actually determine times, size for directories
+                    Ok(FileAttr {
+                        size: 0,
+                        blocks: 0,
+                        atime: SystemTime::now(),
+                        mtime: SystemTime::now(),
+                        ctime: SystemTime::now(),
+                        crtime: SystemTime::now(),
+                        kind: fuse_mt::FileType::Directory,
+                        perm: 0,
+                        nlink: 0,
+                        uid: 0,
+                        gid: 0,
+                        rdev: 0,
+                        flags: 0,
+                    })
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            if path.to_path_buf() == PathBuf::from("/") {
+                // TODO: Actually determine times, size for root directory
+                Ok(FileAttr {
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuse_mt::FileType::Directory,
+                    perm: 0,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                })
+            } else {
+                Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
+            }
         }
     }
 }
@@ -127,12 +239,15 @@ impl FilesystemMT for OkuFs {
     fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
         println!("[getattr] path = {:?}, fh = {:?}", path, fh);
         // Potential improvement: spawn a new thread to block on.
-        let file_attr_result = self
+        let fs_entry_attr_result = self
             .handle
-            .block_on(async { self.get_file_attributes(&path).await });
-        match file_attr_result {
-            Ok(file_attr) => Ok((std::time::Duration::from_secs(1), file_attr)),
-            Err(_e) => Err(libc::ENOSYS),
+            .block_on(async { self.get_fs_entry_attributes(&path).await });
+        match fs_entry_attr_result {
+            Ok(fs_entry_attr) => Ok((std::time::Duration::from_secs(1), fs_entry_attr)),
+            Err(e) => {
+                eprintln!("[getattr]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 
@@ -140,7 +255,10 @@ impl FilesystemMT for OkuFs {
         println!("[open] path = {:?}, flags = {}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
-            Err(_e) => Err(libc::ENOSYS),
+            Err(e) => {
+                eprintln!("[open]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 
@@ -178,12 +296,24 @@ impl FilesystemMT for OkuFs {
                                 ));
                             }
                         }
-                        Err(_e) => callback(Err(libc::ENOSYS)),
+                        Err(e) => {
+                            eprintln!("[read]: {}", e);
+                            callback(Err(libc::ENOSYS))
+                        }
                     }
                 }
-                None => callback(Err(libc::ENOSYS)),
+                None => {
+                    eprintln!(
+                        "[read] failed on: path = {:?}, fh = {}, offset = {}, size = {}",
+                        path, fh, offset, size
+                    );
+                    callback(Err(libc::ENOSYS))
+                }
             },
-            Err(_e) => callback(Err(libc::ENOSYS)),
+            Err(e) => {
+                eprintln!("[read]: {}", e);
+                callback(Err(libc::ENOSYS))
+            }
         }
     }
 
@@ -206,10 +336,12 @@ impl FilesystemMT for OkuFs {
             path, fh, flags
         );
 
-        if let Ok(_path) = self.remove_fs_handle(fh) {
-            Ok(())
-        } else {
-            Err(libc::ENOSYS)
+        match self.remove_fs_handle(fh) {
+            Ok(_path) => Ok(()),
+            Err(e) => {
+                eprintln!("[release]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 
@@ -217,38 +349,48 @@ impl FilesystemMT for OkuFs {
         println!("[opendir] path = {:?}, flags = {}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
-            Err(_e) => Err(libc::ENOSYS),
+            Err(e) => {
+                eprintln!("[opendir]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 
     fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
         println!("[readdir] path = {:?}, fh = {}", path, fh);
 
+        let mut directory_entries: Vec<DirectoryEntry> = vec![
+            DirectoryEntry {
+                name: std::ffi::OsString::from("."),
+                kind: fuse_mt::FileType::Directory,
+            },
+            DirectoryEntry {
+                name: std::ffi::OsString::from(".."),
+                kind: fuse_mt::FileType::Directory,
+            },
+        ];
         match parse_fuse_path(&path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => {
                     let files_result = self.handle.block_on(async {
-                        self.list_files(namespace_id, Some(replica_path)).await
+                        self.list_files(namespace_id, Some(replica_path.clone()))
+                            .await
                     });
                     match files_result {
-                        Ok(files) => {
-                            let mut directory_entries: Vec<DirectoryEntry> = Vec::new();
-                            // This says all descending files are the immediate children of this directory.
-                            // TODO: Figure out what the subdirectories of a directory are.
-                            for file in files {
-                                directory_entries.push(DirectoryEntry {
-                                    name: PathBuf::from(
-                                        std::str::from_utf8(file.key()).unwrap_or_default(),
-                                    )
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_os_string(),
-                                    kind: fuse_mt::FileType::RegularFile,
-                                });
+                        Ok(files) => match get_immediate_children(replica_path, files) {
+                            Ok(immediate_children) => {
+                                directory_entries.extend(immediate_children);
+                                Ok(directory_entries)
                             }
-                            Ok(directory_entries)
+                            Err(e) => {
+                                eprintln!("[readdir]: {}", e);
+                                Err(libc::ENOSYS)
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("[readdir]: {}", e);
+                            Err(libc::ENOSYS)
                         }
-                        Err(_e) => Err(libc::ENOSYS),
                     }
                 }
                 None => {
@@ -256,7 +398,6 @@ impl FilesystemMT for OkuFs {
                         self.handle.block_on(async { self.list_replicas().await });
                     match replicas_result {
                         Ok(replicas) => {
-                            let mut directory_entries: Vec<DirectoryEntry> = Vec::new();
                             for replica in replicas {
                                 directory_entries.push(DirectoryEntry {
                                     name: replica.to_string().into(),
@@ -265,11 +406,17 @@ impl FilesystemMT for OkuFs {
                             }
                             Ok(directory_entries)
                         }
-                        Err(_e) => Err(libc::ENOSYS),
+                        Err(e) => {
+                            eprintln!("[readdir]: {}", e);
+                            Err(libc::ENOSYS)
+                        }
                     }
                 }
             },
-            Err(_e) => Err(libc::ENOSYS),
+            Err(e) => {
+                eprintln!("[readdir]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 
@@ -279,10 +426,12 @@ impl FilesystemMT for OkuFs {
             path, fh, flags
         );
 
-        if let Ok(_path) = self.remove_fs_handle(fh) {
-            Ok(())
-        } else {
-            Err(libc::ENOSYS)
+        match self.remove_fs_handle(fh) {
+            Ok(_path) => Ok(()),
+            Err(e) => {
+                eprintln!("[releasedir]: {}", e);
+                Err(libc::ENOSYS)
+            }
         }
     }
 

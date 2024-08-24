@@ -117,6 +117,10 @@ pub enum OkuFuseError {
     #[diagnostic(code(fuse::no_root), url(docsrs))]
     /// No root in path.
     NoRoot,
+    #[error("No replica with ID {0:?} found locally.")]
+    #[diagnostic(code(fuse::no_replica), url(docsrs))]
+    /// No replica with ID found locally.
+    NoReplica(String),
     #[error("No file at path {0:?}.")]
     #[diagnostic(code(fuse::no_file_at_path), url(docsrs))]
     /// No file at path.
