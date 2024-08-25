@@ -2,28 +2,37 @@ use crate::error::OkuFuseError;
 use crate::fs::OkuFs;
 use chrono::TimeZone;
 use fuse_mt::CallbackResult;
+use fuse_mt::CreatedEntry;
 use fuse_mt::DirectoryEntry;
 use fuse_mt::FileAttr;
 use fuse_mt::FilesystemMT;
 use fuse_mt::RequestInfo;
+use fuse_mt::ResultCreate;
 use fuse_mt::ResultEmpty;
 use fuse_mt::ResultEntry;
 use fuse_mt::ResultOpen;
 use fuse_mt::ResultReaddir;
 use fuse_mt::ResultSlice;
 use fuse_mt::ResultStatfs;
+use fuse_mt::ResultWrite;
 use fuse_mt::Statfs;
 use iroh::client::docs::Entry;
 use iroh::docs::NamespaceId;
 use miette::IntoDiagnostic;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::io::BufWriter;
+use std::io::Cursor;
+use std::io::Seek;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
 use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::trace;
 
 /// Parse a FUSE path to retrieve the replica and path.
@@ -153,6 +162,10 @@ impl OkuFs {
     pub async fn get_fs_entry_attributes(&self, path: &Path) -> miette::Result<FileAttr> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
+            let fs_entry_permission = match self.get_replica_capability(namespace_id).await? {
+                iroh::docs::CapabilityKind::Read => 0o444u16,
+                iroh::docs::CapabilityKind::Write => 0o777u16,
+            };
             let fs_entry_type = self.is_file_or_directory(path).await?;
             match fs_entry_type {
                 fuse_mt::FileType::RegularFile => {
@@ -163,7 +176,6 @@ impl OkuFs {
                                 .await? as i64,
                         ),
                     );
-                    // TODO: Actually determine permissions
                     Ok(FileAttr {
                         size: file_entry.content_len(),
                         blocks: 0,
@@ -174,7 +186,7 @@ impl OkuFs {
                         ctime: estimated_creation_time,
                         crtime: estimated_creation_time,
                         kind: fs_entry_type,
-                        perm: 0,
+                        perm: fs_entry_permission,
                         nlink: 0,
                         uid: 0,
                         gid: 0,
@@ -192,7 +204,6 @@ impl OkuFs {
                     let directory_size_estimate = self
                         .get_folder_size(namespace_id, replica_path.clone())
                         .await?;
-                    // TODO: Actually determine size, permissions for directories
                     Ok(FileAttr {
                         size: directory_size_estimate,
                         blocks: 0,
@@ -219,7 +230,7 @@ impl OkuFs {
                             ),
                         ),
                         kind: fuse_mt::FileType::Directory,
-                        perm: 0,
+                        perm: fs_entry_permission,
                         nlink: 0,
                         uid: 0,
                         gid: 0,
@@ -234,7 +245,6 @@ impl OkuFs {
                 let root_creation_time_estimate = self.get_oldest_timestamp().await?;
                 let root_modification_time_estimate = self.get_newest_timestamp().await?;
                 let root_size_estimate = self.get_size().await?;
-                // TODO: Actually determine size for root directory
                 Ok(FileAttr {
                     size: root_size_estimate,
                     blocks: 0,
@@ -253,7 +263,7 @@ impl OkuFs {
                         (root_creation_time_estimate * 1000).try_into().unwrap_or(0),
                     )),
                     kind: fuse_mt::FileType::Directory,
-                    perm: 0,
+                    perm: 0o444u16,
                     nlink: 0,
                     uid: 0,
                     gid: 0,
@@ -280,13 +290,13 @@ impl FilesystemMT for OkuFs {
     }
 
     fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
-        debug!("[getattr] path = {:?}, fh = {:?}", path, fh);
+        trace!("[getattr] path = {:?}, fh = {:?}", path, fh);
         // Potential improvement: spawn a new thread to block on.
         let fs_entry_attr_result = self
             .handle
             .block_on(async { self.get_fs_entry_attributes(&path).await });
         match fs_entry_attr_result {
-            Ok(fs_entry_attr) => Ok((std::time::Duration::from_secs(1), fs_entry_attr)),
+            Ok(fs_entry_attr) => Ok((std::time::Duration::from_secs(0), fs_entry_attr)),
             Err(e) => {
                 error!("[getattr]: {}", e);
                 Err(libc::ENOSYS)
@@ -295,7 +305,7 @@ impl FilesystemMT for OkuFs {
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        debug!("[open] path = {:?}, flags = {}", path, flags);
+        debug!("[open] path = {:?}, flags = {:#06o}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
             Err(e) => {
@@ -365,6 +375,16 @@ impl FilesystemMT for OkuFs {
         return Ok(());
     }
 
+    fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, _datasync: bool) -> ResultEmpty {
+        debug!("[fsync] path = {:?}, fh = {}", path, fh);
+        return Ok(());
+    }
+
+    fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, _datasync: bool) -> ResultEmpty {
+        debug!("[fsyncdir] path = {:?}, fh = {}", path, fh);
+        return Ok(());
+    }
+
     fn release(
         &self,
         _req: RequestInfo,
@@ -375,7 +395,7 @@ impl FilesystemMT for OkuFs {
         _flush: bool,
     ) -> ResultEmpty {
         debug!(
-            "[release] path = {:?}, fh = {}, flags = {}",
+            "[release] path = {:?}, fh = {}, flags = {:#06o}",
             path, fh, flags
         );
 
@@ -389,7 +409,7 @@ impl FilesystemMT for OkuFs {
     }
 
     fn opendir(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        debug!("[opendir] path = {:?}, flags = {}", path, flags);
+        debug!("[opendir] path = {:?}, flags = {:#06o}", path, flags);
         match self.add_fs_handle(path) {
             Ok(fs_handle) => Ok((fs_handle, flags)),
             Err(e) => {
@@ -465,7 +485,7 @@ impl FilesystemMT for OkuFs {
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, flags: u32) -> ResultEmpty {
         debug!(
-            "[releasedir] path = {:?}, fh = {}, flags = {}",
+            "[releasedir] path = {:?}, fh = {}, flags = {:#06o}",
             path, fh, flags
         );
 
@@ -479,7 +499,7 @@ impl FilesystemMT for OkuFs {
     }
 
     fn statfs(&self, _req: RequestInfo, path: &Path) -> ResultStatfs {
-        debug!("[statfs] path = {:?}", path);
+        trace!("[statfs] path = {:?}", path);
 
         let file_count = self.handle.block_on(async {
             let mut file_count = 0u64;
@@ -505,5 +525,278 @@ impl FilesystemMT for OkuFs {
         };
 
         return Ok(statfs);
+    }
+
+    fn rmdir(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
+        debug!("[rmdir] parent = {:?}, name = {:?}", parent, name);
+
+        let path = parent.join(name);
+
+        match parse_fuse_path(&path) {
+            Ok(parsed_path) => match parsed_path {
+                Some((namespace_id, replica_path)) => self.handle.block_on(async {
+                    match self.delete_directory(namespace_id, replica_path).await {
+                        Ok(entries_deleted) => {
+                            info!("{} entries deleted in {:?}", entries_deleted, path);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("[rmdir]: {}", e);
+                            Err(libc::ENOSYS)
+                        }
+                    }
+                }),
+                None => Err(libc::ENOSYS),
+            },
+            Err(e) => {
+                error!("[rmdir]: {}", e);
+                Err(libc::ENOSYS)
+            }
+        }
+    }
+
+    fn create(
+        &self,
+        _req: RequestInfo,
+        parent: &Path,
+        name: &OsStr,
+        mode: u32,
+        flags: u32,
+    ) -> ResultCreate {
+        debug!(
+            "[create] parent = {:?}, name = {:?}, mode = {}, flags = {:#06o}",
+            parent, name, mode, flags
+        );
+
+        let path = parent.join(name);
+
+        match parse_fuse_path(&path) {
+            Ok(parsed_path) => match parsed_path {
+                Some((namespace_id, replica_path)) => self.handle.block_on(async {
+                    match self
+                        .create_or_modify_file(namespace_id, replica_path, vec![])
+                        .await
+                    {
+                        Ok(file_hash) => {
+                            info!("File created at {:?} with hash {}", path, file_hash);
+                            match self.get_fs_entry_attributes(&path).await {
+                                Ok(file_attr) => match self.add_fs_handle(&path) {
+                                    Ok(file_handle) => Ok(CreatedEntry {
+                                        ttl: std::time::Duration::from_secs(0),
+                                        attr: file_attr,
+                                        fh: file_handle,
+                                        flags: flags,
+                                    }),
+                                    Err(e) => {
+                                        error!("[create]: {}", e);
+                                        Err(libc::ENOSYS)
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("[create]: {}", e);
+                                    Err(libc::ENOSYS)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("[create]: {}", e);
+                            Err(libc::ENOSYS)
+                        }
+                    }
+                }),
+                None => Err(libc::ENOSYS),
+            },
+            Err(e) => {
+                error!("[create]: {}", e);
+                Err(libc::ENOSYS)
+            }
+        }
+    }
+
+    fn rename(
+        &self,
+        _req: RequestInfo,
+        parent: &Path,
+        name: &OsStr,
+        newparent: &Path,
+        newname: &OsStr,
+    ) -> ResultEmpty {
+        debug!(
+            "[rename] parent = {:?}, name = {:?}, newparent = {:?}, newname = {:?}",
+            parent, name, newparent, newname
+        );
+
+        let old_path = parent.join(name);
+        let new_path = newparent.join(newname);
+
+        match parse_fuse_path(&old_path) {
+            Ok(parsed_path) => {
+                match parsed_path {
+                    Some((old_namespace_id, old_replica_path)) => {
+                        self.handle.block_on(async {
+                            match self.is_file_or_directory(&old_path).await {
+                                Ok(fs_entry_type) => {
+                                    match parse_fuse_path(&new_path) {
+                                        Ok(parsed_path) => {
+                                            match parsed_path {
+                                                Some((new_namespace_id, new_replica_path)) => {
+                                                    match fs_entry_type {
+                                                        fuser::FileType::RegularFile => {
+                                                            match self.move_file(old_namespace_id, old_replica_path, new_namespace_id, new_replica_path).await {
+                                                                Ok(file_move_info) => {
+                                                                    info!("File with hash {} moved from {:?} to {:?} ({} entries deleted)", file_move_info.0, old_path, new_path, file_move_info.1);
+                                                                    Ok(())
+                                                                },
+                                                                Err(e) => {
+                                                                    error!("[rename]: {}", e);
+                                                                    Err(libc::ENOSYS)
+                                                                }
+                                                            }
+                                                        },
+                                                        fuser::FileType::Directory => {
+                                                            match self.move_directory(old_namespace_id, old_replica_path, new_namespace_id, new_replica_path).await {
+                                                                Ok(directory_move_info) => {
+                                                                    info!("Directory moved from {:?} to {:?} ({} entries deleted, new file hashes: {:#?})", old_path, new_path, directory_move_info.1, directory_move_info.0);
+                                                                    Ok(())
+                                                                },
+                                                                Err(e) => {
+                                                                    error!("[rename]: {}", e);
+                                                                    Err(libc::ENOSYS)
+                                                                }
+                                                            }
+                                                        },
+                                                        _ => Err(libc::ENOSYS)
+                                                    }
+                                                },
+                                                None => Err(libc::ENOSYS)
+                                            }
+                                        },
+                                        Err(e) => {
+                                            error!("[rename]: {}", e);
+                                            Err(libc::ENOSYS)
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("[rename]: {}", e);
+                                    Err(libc::ENOSYS)
+                                }
+                            }
+                        })
+                    },
+                    None => Err(libc::ENOSYS)
+                }
+            },
+            Err(e) => {
+                error!("[rename]: {}", e);
+                Err(libc::ENOSYS)
+            }
+        }
+    }
+
+    fn access(&self, _req: RequestInfo, path: &Path, mask: u32) -> ResultEmpty {
+        trace!("[access] path = {:?}, mask = {:#06o}", path, mask);
+
+        let fs_entry_attr_result = self
+            .handle
+            .block_on(async { self.get_fs_entry_attributes(&path).await });
+        match fs_entry_attr_result {
+            Ok(fs_entry_attr) => {
+                trace!("[access] permission: {:#06o}", fs_entry_attr.perm);
+                trace!(
+                    "[access] mask applied: {:#06o}",
+                    fs_entry_attr.perm | mask.try_into().unwrap_or(u16::MIN)
+                );
+                if fs_entry_attr.perm | mask.try_into().unwrap_or(u16::MIN) != 0 {
+                    Ok(())
+                } else {
+                    Err(libc::EACCES)
+                }
+            }
+            Err(e) => {
+                error!("[access]: {}", e);
+                Err(libc::ENOSYS)
+            }
+        }
+    }
+
+    fn write(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        offset: u64,
+        data: Vec<u8>,
+        flags: u32,
+    ) -> ResultWrite {
+        debug!(
+            "[write] path = {:?}, fh = {}, offset = {}, data = {:#?}, flags = {:#06o}",
+            path,
+            fh,
+            offset,
+            std::str::from_utf8(&data),
+            flags
+        );
+
+        match parse_fuse_path(&path) {
+            Ok(parsed_path) => match parsed_path {
+                Some((namespace_id, replica_path)) => self.handle.block_on(async {
+                    match self.read_file(namespace_id, replica_path.clone()).await {
+                        Ok(file_bytes) => {
+                            let mut writer = BufWriter::new(Cursor::new(file_bytes.to_vec()));
+                            match writer.seek(std::io::SeekFrom::Start(offset)) {
+                                Ok(_new_position) => match writer.write(&data) {
+                                    Ok(_) => match writer.into_inner() {
+                                        Ok(inner_cursor) => {
+                                            match self
+                                                .create_or_modify_file(
+                                                    namespace_id,
+                                                    replica_path,
+                                                    inner_cursor.into_inner(),
+                                                )
+                                                .await
+                                            {
+                                                Ok(file_hash) => {
+                                                    info!(
+                                                        "File at {:?} updated (hash: {})",
+                                                        path, file_hash
+                                                    );
+                                                    Ok(data.len().try_into().unwrap_or(u32::MAX))
+                                                }
+                                                Err(e) => {
+                                                    error!("[write]: {}", e);
+                                                    Err(libc::ENOSYS)
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("[write]: {}", e);
+                                            Err(libc::ENOSYS)
+                                        }
+                                    },
+                                    Err(e) => {
+                                        error!("[write]: {}", e);
+                                        Err(libc::ENOSYS)
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("[write]: {}", e);
+                                    Err(libc::ENOSYS)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("[write]: {}", e);
+                            Err(libc::ENOSYS)
+                        }
+                    }
+                }),
+                None => Err(libc::ENOSYS),
+            },
+            Err(e) => {
+                error!("[write]: {}", e);
+                Err(libc::ENOSYS)
+            }
+        }
     }
 }

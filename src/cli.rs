@@ -79,12 +79,15 @@ enum Commands {
     },
     /// Move a file from one path to another in a replica.
     MoveFile {
-        #[arg(short, long, value_name = "REPLICA_ID")]
-        /// The ID of the replica to move the file in.
-        replica_id: NamespaceId,
+        #[arg(short, long, value_name = "OLD_REPLICA_ID")]
+        /// The ID of the replica containing the file to move.
+        old_replica_id: NamespaceId,
         #[arg(short, long, value_name = "OLD_PATH")]
         /// The path of the file to move.
         old_path: PathBuf,
+        #[arg(short, long, value_name = "NEW_REPLICA_ID")]
+        /// The ID of the replica to move the file to.
+        new_replica_id: NamespaceId,
         #[arg(short, long, value_name = "NEW_PATH")]
         /// The new path of the file.
         new_path: PathBuf,
@@ -129,9 +132,8 @@ async fn main() -> miette::Result<()> {
         _ => Level::TRACE,
     };
     let mut subscriber_builder = tracing_subscriber::fmt()
-        .with_env_filter("oku-fs")
+        .with_env_filter(format!("oku_fs={}", verbosity_level))
         .pretty()
-        .with_max_level(verbosity_level)
         .with_file(false)
         .with_line_number(false);
     if cli.verbosity >= 3 {
@@ -182,13 +184,22 @@ async fn main() -> miette::Result<()> {
             info!("Removed replica with ID: {}", replica_id);
         }
         Some(Commands::MoveFile {
-            replica_id,
+            old_replica_id,
             old_path,
+            new_replica_id,
             new_path,
         }) => {
-            node.move_file(replica_id, old_path.clone(), new_path.clone())
-                .await?;
-            info!("Moved file from {:?} to {:?}", old_path, new_path);
+            node.move_file(
+                old_replica_id.clone(),
+                old_path.clone(),
+                new_replica_id.clone(),
+                new_path.clone(),
+            )
+            .await?;
+            info!(
+                "Moved file from {:?} in {} to {:?} in {}",
+                old_path, old_replica_id, new_path, new_replica_id
+            );
         }
         Some(Commands::GetReplica { replica_id, path }) => {
             node.get_external_replica(replica_id, path.clone(), true, true)

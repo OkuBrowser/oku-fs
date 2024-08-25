@@ -2,13 +2,14 @@ use crate::discovery::{announce_replica, INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY}
 use crate::discovery::{
     PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
 };
-use crate::error::{OkuDiscoveryError, OkuRelayError};
+use crate::error::{OkuDiscoveryError, OkuFuseError, OkuRelayError};
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::BlobTicket;
 use iroh::client::docs::Entry;
+use iroh::docs::CapabilityKind;
 use iroh::net::discovery::dns::DnsDiscovery;
 use iroh::net::discovery::pkarr::PkarrPublisher;
 use iroh::{
@@ -296,6 +297,27 @@ impl OkuFs {
         Ok(replica_ids)
     }
 
+    pub async fn get_replica_capability(
+        &self,
+        namespace_id: NamespaceId,
+    ) -> miette::Result<CapabilityKind> {
+        let docs_client = &self.node.docs();
+        let replicas = docs_client
+            .list()
+            .await
+            .map_err(|_e| OkuFsError::CannotListReplicas)?;
+        pin_mut!(replicas);
+        let replicas_vec: Vec<(NamespaceId, CapabilityKind)> =
+            replicas.map(|replica| replica.unwrap()).collect().await;
+        match replicas_vec
+            .iter()
+            .find(|replica| replica.0 == namespace_id)
+        {
+            Some(replica) => Ok(replica.1),
+            None => Err(OkuFuseError::NoReplica(namespace_id.to_string()).into()),
+        }
+    }
+
     /// Lists files in a replica.
     ///
     /// # Arguments
@@ -573,27 +595,59 @@ impl OkuFs {
     ///
     /// # Arguments
     ///
-    /// * `namespace_id` - The ID of the replica containing the file to move.
+    /// * `from_namespace_id` - The ID of the replica containing the file to move.
     ///
-    /// * `from` - The path of the file to move.
+    /// * `to_namespace_id` - The ID of the replica to move the file to.
     ///
-    /// * `to` - The path to move the file to.
+    /// * `from_path` - The path of the file to move.
+    ///
+    /// * `to_path` - The path to move the file to.
     ///
     /// # Returns
     ///
     /// A tuple containing the hash of the file at the new destination and the number of replica entries deleted during the operation, which should be 1 if the file at the original path was deleted.
     pub async fn move_file(
         &self,
-        namespace_id: NamespaceId,
-        from: PathBuf,
-        to: PathBuf,
+        from_namespace_id: NamespaceId,
+        from_path: PathBuf,
+        to_namespace_id: NamespaceId,
+        to_path: PathBuf,
     ) -> miette::Result<(Hash, usize)> {
-        let data = self.read_file(namespace_id, from.clone()).await?;
+        let data = self.read_file(from_namespace_id, from_path.clone()).await?;
         let hash = self
-            .create_or_modify_file(namespace_id, to.clone(), data)
+            .create_or_modify_file(to_namespace_id, to_path.clone(), data)
             .await?;
-        let entries_deleted = self.delete_file(namespace_id, from).await?;
+        let entries_deleted = self.delete_file(from_namespace_id, from_path).await?;
         Ok((hash, entries_deleted))
+    }
+
+    pub async fn move_directory(
+        &self,
+        from_namespace_id: NamespaceId,
+        from_path: PathBuf,
+        to_namespace_id: NamespaceId,
+        to_path: PathBuf,
+    ) -> miette::Result<(Vec<Hash>, usize)> {
+        let mut entries_deleted = 0;
+        let mut moved_file_hashes = Vec::new();
+        let old_directory_files = self.list_files(from_namespace_id, Some(from_path)).await?;
+        for old_directory_file in old_directory_files {
+            let old_file_path =
+                PathBuf::from_str(std::str::from_utf8(old_directory_file.key()).into_diagnostic()?)
+                    .into_diagnostic()?;
+            let new_file_path = to_path.join(old_file_path.file_name().unwrap_or_default());
+            let file_move_info = self
+                .move_file(
+                    from_namespace_id,
+                    old_file_path,
+                    to_namespace_id,
+                    new_file_path,
+                )
+                .await?;
+            moved_file_hashes.push(file_move_info.0);
+            entries_deleted += file_move_info.1;
+        }
+        Ok((moved_file_hashes, entries_deleted))
     }
 
     /// Deletes a directory and all its contents.

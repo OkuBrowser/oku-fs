@@ -102,3 +102,4 @@ target/
 .oku
 target-old/
 tree.txt
+test/
