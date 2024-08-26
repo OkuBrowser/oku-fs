@@ -5,6 +5,8 @@ use crate::discovery::{
 use crate::error::{OkuDiscoveryError, OkuFuseError, OkuRelayError};
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use bytes::Bytes;
+#[cfg(feature = "fuse")]
+use fuse_mt::spawn_mount;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::BlobTicket;
@@ -21,9 +23,6 @@ use iroh::{
 };
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
-// use iroh_pkarr_node_discovery::PkarrNodeDiscovery;
-#[cfg(feature = "fuse")]
-use fuse_mt::spawn_mount;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
@@ -74,6 +73,15 @@ pub fn path_to_entry_key(path: PathBuf) -> Bytes {
     path_bytes.into()
 }
 
+/// Converts a key of a replica entry into a path within a replica.
+///
+/// # Arguments
+///
+/// * `key` - The replica entry key, being a null-terminated byte string.
+///
+/// # Returns
+///
+/// A path pointing to the file with the key.
 pub fn entry_key_to_path(key: &[u8]) -> miette::Result<PathBuf> {
     Ok(PathBuf::from(
         CString::from_vec_with_nul(key.to_vec())
@@ -116,12 +124,14 @@ pub struct OkuFs {
     pub(crate) author_id: AuthorId,
     /// The configuration of the file system.
     pub(crate) config: OkuFsConfig,
-    /// The handles pointing to paths within the filesystem; used by FUSE.
     #[cfg(feature = "fuse")]
+    /// The handles pointing to paths within the file system; used by FUSE.
     pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,
     #[cfg(feature = "fuse")]
+    /// The latest file system handle created.
     pub(crate) newest_handle: Arc<RwLock<u64>>,
     #[cfg(feature = "fuse")]
+    /// A Tokio runtime handle to perform asynchronous operations with.
     pub(crate) handle: Handle,
 }
 
@@ -129,6 +139,10 @@ impl OkuFs {
     /// Starts an instance of an Oku file system.
     /// In the background, an Iroh node is started, and the node's address is periodically announced to the mainline DHT.
     /// If no author credentials are found on disk, new credentials are generated.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - If compiling with the `fuse` feature, a Tokio runtime handle is required.
     ///
     /// # Returns
     ///
@@ -309,6 +323,15 @@ impl OkuFs {
         Ok(replica_ids)
     }
 
+    /// Retrieves the permissions for a local replica.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica.
+    ///
+    /// # Returns
+    ///
+    /// If either the replica can be read from & written to, or if it can only be read from.
     pub async fn get_replica_capability(
         &self,
         namespace_id: NamespaceId,
@@ -497,6 +520,17 @@ impl OkuFs {
         Ok(entry)
     }
 
+    /// Determines the oldest timestamp of a file.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the file.
+    ///
+    /// * `path` - The path to the file.
+    ///
+    /// # Returns
+    ///
+    /// The timestamp, in microseconds from the Unix epoch, of the oldest entry in the file.
     pub async fn get_oldest_entry_timestamp(
         &self,
         namespace_id: NamespaceId,
@@ -525,6 +559,17 @@ impl OkuFs {
         Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
     }
 
+    /// Determines the oldest timestamp of a file entry in a folder.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the folder.
+    ///
+    /// * `path` - The folder whose oldest timestamp is to be determined.
+    ///
+    /// # Returns
+    ///
+    /// The oldest timestamp of any file descending from this folder, in microseconds from the Unix epoch.
     pub async fn get_oldest_timestamp_in_folder(
         &self,
         namespace_id: NamespaceId,
@@ -541,6 +586,11 @@ impl OkuFs {
         Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
     }
 
+    /// Determines the oldest timestamp of a file entry in any replica stored locally.
+    ///
+    /// # Returns
+    ///
+    /// The oldest timestamp in any local replica, in microseconds from the Unix epoch.
     pub async fn get_oldest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
@@ -553,6 +603,17 @@ impl OkuFs {
         Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
     }
 
+    /// Determines the latest timestamp of a file entry in a folder.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the folder.
+    ///
+    /// * `path` - The folder whose latest timestamp is to be determined.
+    ///
+    /// # Returns
+    ///
+    /// The latest timestamp of any file descending from this folder, in microseconds from the Unix epoch.
     pub async fn get_newest_timestamp_in_folder(
         &self,
         namespace_id: NamespaceId,
@@ -566,6 +627,11 @@ impl OkuFs {
         Ok(*timestamps.iter().max().unwrap_or(&u64::MIN))
     }
 
+    /// Determines the latest timestamp of a file entry in any replica stored locally.
+    ///
+    /// # Returns
+    ///
+    /// The latest timestamp in any local replica, in microseconds from the Unix epoch.
     pub async fn get_newest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
@@ -578,6 +644,17 @@ impl OkuFs {
         Ok(*timestamps.iter().max().unwrap_or(&u64::MIN))
     }
 
+    /// Determines the size of a folder.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the folder.
+    ///
+    /// * `path` - The path to the folder within the replica.
+    ///
+    /// # Returns
+    ///
+    /// The total size, in bytes, of the files descending from this folder.
     pub async fn get_folder_size(
         &self,
         namespace_id: NamespaceId,
@@ -591,6 +668,11 @@ impl OkuFs {
         Ok(size)
     }
 
+    /// Determines the size of the file system.
+    ///
+    /// # Returns
+    ///
+    /// The total size, in bytes, of the files in every replica stored locally.
     pub async fn get_size(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut size = 0;
@@ -653,6 +735,21 @@ impl OkuFs {
         Ok((hash, entries_deleted))
     }
 
+    /// Moves a directory by copying it to a new location and deleting the original.
+    ///
+    /// # Arguments
+    ///
+    /// * `from_namespace_id` - The ID of the replica containing the directory to move.
+    ///
+    /// * `to_namespace_id` - The ID of the replica to move the directory to.
+    ///
+    /// * `from_path` - The path of the directory to move.
+    ///
+    /// * `to_path` - The path to move the directory to.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the list of file hashes for files at their new destinations, and the total number of replica entries deleted during the operation.
     pub async fn move_directory(
         &self,
         from_namespace_id: NamespaceId,
@@ -737,6 +834,15 @@ impl OkuFs {
     }
 
     #[cfg(feature = "fuse")]
+    /// Mount the file system.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the file system mount point.
+    ///
+    /// # Returns
+    ///
+    /// A handle referencing the mounted file system; joining or dropping the handle will unmount the file system and shutdown the node.
     pub fn mount(&self, path: PathBuf) -> miette::Result<fuser::BackgroundSession> {
         Ok(spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()?)
     }

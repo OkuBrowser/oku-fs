@@ -63,6 +63,17 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
     Err(OkuFuseError::NoRoot.into())
 }
 
+/// Determines the immediate contents of a directory.
+///
+/// # Arguments
+///
+/// * `prefix_path` - The path to the directory.
+///
+/// * `files` - The recursive contents of the directory.
+///
+/// # Returns
+///
+/// The file system entries in the directory.
 pub fn get_immediate_children(
     prefix_path: PathBuf,
     files: Vec<Entry>,
@@ -111,6 +122,15 @@ pub fn get_immediate_children(
 }
 
 impl OkuFs {
+    /// Translates a file system handle into a path.
+    ///
+    /// # Arguments
+    ///
+    /// * `fh` - The file system handle for a file system entry.
+    ///
+    /// # Returns
+    ///
+    /// The path to the corresponding file system entry.
     pub fn fs_handle_to_path(&self, fh: u64) -> miette::Result<Option<PathBuf>> {
         match self.fs_handles.read() {
             Ok(fs_handles) => {
@@ -120,6 +140,16 @@ impl OkuFs {
             Err(_e) => Err(OkuFuseError::NoFileWithHandle(fh).into()),
         }
     }
+
+    /// Creates a file system handle for the file system entry at a path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path of the file system entry for which the handle should be made.
+    ///
+    /// # Returns
+    ///
+    /// The file system handle for the file system entry at the path.
     pub fn add_fs_handle(&self, path: &Path) -> miette::Result<u64> {
         match self.fs_handles.write() {
             Ok(mut fs_handles) => match self.newest_handle.write() {
@@ -133,12 +163,32 @@ impl OkuFs {
             Err(_e) => Err(OkuFuseError::FsHandlesFailedUpdate.into()),
         }
     }
+
+    /// Deletes a file system handle for a file system entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `fh` - The file system handle to be dropped.
+    ///
+    /// # Returns
+    ///
+    /// The path of the file system entry whose handle was released.
     pub fn remove_fs_handle(&self, fh: u64) -> miette::Result<Option<PathBuf>> {
         match self.fs_handles.write() {
             Ok(mut fs_handles) => Ok(fs_handles.remove(&fh)),
             Err(_e) => Err(OkuFuseError::FsHandlesFailedUpdate.into()),
         }
     }
+
+    /// Determines if the file system entry at a path is a file or a directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path pointing to the file system entry.
+    ///
+    /// # Returns
+    ///
+    /// The file system entry type, being either a file or a directory.
     pub async fn is_file_or_directory(&self, path: &Path) -> miette::Result<fuse_mt::FileType> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
@@ -190,6 +240,16 @@ impl OkuFs {
             Ok(fuse_mt::FileType::Directory)
         }
     }
+
+    /// Determines the attributes of a file system entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the file system entry.
+    ///
+    /// # Returns
+    ///
+    /// The attributes of the file system entry.
     pub async fn get_fs_entry_attributes(&self, path: &Path) -> miette::Result<FileAttr> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {

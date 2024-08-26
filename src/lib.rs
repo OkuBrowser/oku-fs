@@ -8,6 +8,6 @@ pub mod discovery;
 pub mod error;
 /// An instance of an Oku file system.
 pub mod fs;
-/// FUSE implementation.
 #[cfg(feature = "fuse")]
+/// FUSE implementation.
 pub mod fuse;

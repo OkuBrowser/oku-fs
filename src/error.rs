@@ -1,6 +1,5 @@
-use std::path::PathBuf;
-
 use miette::Diagnostic;
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug, Diagnostic)]

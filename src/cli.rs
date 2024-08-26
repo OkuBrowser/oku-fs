@@ -92,6 +92,21 @@ enum Commands {
         /// The new path of the file.
         new_path: PathBuf,
     },
+    /// Move a directory from one path to another in a replica.
+    MoveDirectory {
+        #[arg(short, long, value_name = "OLD_REPLICA_ID")]
+        /// The ID of the replica containing the directory to move.
+        old_replica_id: NamespaceId,
+        #[arg(short, long, value_name = "OLD_PATH")]
+        /// The path of the directory to move.
+        old_path: PathBuf,
+        #[arg(short, long, value_name = "NEW_REPLICA_ID")]
+        /// The ID of the replica to move the directory to.
+        new_replica_id: NamespaceId,
+        #[arg(short, long, value_name = "NEW_PATH")]
+        /// The new path of the directory.
+        new_path: PathBuf,
+    },
     /// Get a replica from another node.
     GetReplica {
         #[arg(short, long, value_name = "REPLICA_ID")]
@@ -204,6 +219,24 @@ async fn main() -> miette::Result<()> {
             .await?;
             info!(
                 "Moved file from {:?} in {} to {:?} in {}",
+                old_path, old_replica_id, new_path, new_replica_id
+            );
+        }
+        Some(Commands::MoveDirectory {
+            old_replica_id,
+            old_path,
+            new_replica_id,
+            new_path,
+        }) => {
+            node.move_directory(
+                old_replica_id.clone(),
+                old_path.clone(),
+                new_replica_id.clone(),
+                new_path.clone(),
+            )
+            .await?;
+            info!(
+                "Moved directory from {:?} in {} to {:?} in {}",
                 old_path, old_replica_id, new_path, new_replica_id
             );
         }
