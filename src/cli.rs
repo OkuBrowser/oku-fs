@@ -14,7 +14,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
     /// The level of log output; warnings, information, debugging messages, and trace logs.
-    #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0, global = true)]
+    #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 2, global = true)]
     verbosity: u8,
 }
 #[derive(Subcommand)]
@@ -165,7 +165,13 @@ async fn main() -> miette::Result<()> {
         }
         Some(Commands::ListReplicas) => {
             let replicas = node.list_replicas().await?;
-            println!("Replicas: {:#?}", replicas);
+            println!(
+                "Replicas: {:#?}",
+                replicas
+                    .iter()
+                    .map(|replica| replica.to_string())
+                    .collect::<Vec<String>>()
+            );
         }
         Some(Commands::GetFile { replica_id, path }) => {
             let data = node.read_file(replica_id, path).await?;

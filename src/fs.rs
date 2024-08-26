@@ -30,8 +30,8 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::str::FromStr;
 #[cfg(feature = "fuse")]
 use std::sync::{Arc, RwLock};
 use std::{error::Error, path::PathBuf};
@@ -40,6 +40,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
+use tracing::error;
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
@@ -71,6 +72,15 @@ pub fn path_to_entry_key(path: PathBuf) -> Bytes {
     let mut path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.push(b'\0');
     path_bytes.into()
+}
+
+pub fn entry_key_to_path(key: &[u8]) -> miette::Result<PathBuf> {
+    Ok(PathBuf::from(
+        CString::from_vec_with_nul(key.to_vec())
+            .into_diagnostic()?
+            .into_string()
+            .into_diagnostic()?,
+    ))
 }
 
 /// Converts a path to a key prefix for entries in a file system replica.
@@ -127,28 +137,32 @@ impl OkuFs {
         let node_path = PathBuf::from(FS_PATH).join("node");
         let node = FsNode::persistent(node_path)
             .await
-            .map_err(|_e| OkuFsError::CannotStartNode)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotStartNode
+            })?
             .spawn()
             .await
-            .map_err(|_e| OkuFsError::CannotStartNode)?;
-        let authors = node
-            .authors()
-            .list()
-            .await
-            .map_err(|_e| OkuFsError::CannotRetrieveAuthors)?;
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotStartNode
+            })?;
+        let authors = node.authors().list().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotRetrieveAuthors
+        })?;
         futures::pin_mut!(authors);
         let authors_count = authors.as_mut().count().await.to_owned();
         let author_id = if authors_count == 0 {
-            node.authors()
-                .create()
-                .await
-                .map_err(|_e| OkuFsError::AuthorCannotBeCreated)?
+            node.authors().create().await.map_err(|e| {
+                error!("{}", e);
+                OkuFsError::AuthorCannotBeCreated
+            })?
         } else {
-            let authors = node
-                .authors()
-                .list()
-                .await
-                .map_err(|_e| OkuFsError::CannotRetrieveAuthors)?;
+            let authors = node.authors().list().await.map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotRetrieveAuthors
+            })?;
             futures::pin_mut!(authors);
             let authors_list: Vec<AuthorId> = authors.map(|author| author.unwrap()).collect().await;
             authors_list[0]
@@ -165,12 +179,10 @@ impl OkuFs {
             #[cfg(feature = "fuse")]
             handle: handle.clone(),
         };
-        let node_addr = oku_fs
-            .node
-            .net()
-            .node_addr()
-            .await
-            .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
+        let node_addr = oku_fs.node.net().node_addr().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotRetrieveNodeAddress
+        })?;
         let addr_info = node_addr.info;
         let magic_endpoint = oku_fs.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
@@ -189,7 +201,10 @@ impl OkuFs {
                 oku_fs_clone
                     .connect_to_relay(relay_address.to_string())
                     .await
-                    .map_err(|_e| OkuRelayError::ProblemConnecting(relay_address.to_string()))
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuRelayError::ProblemConnecting(relay_address.to_string())
+                    })
                     .unwrap();
             });
         }
@@ -221,12 +236,10 @@ impl OkuFs {
     ///
     /// A discovery service for finding other node's addresses given their IDs.
     pub async fn create_discovery_service(&self) -> miette::Result<ConcurrentDiscovery> {
-        let node_addr = self
-            .node
-            .net()
-            .node_addr()
-            .await
-            .map_err(|_e| OkuFsError::CannotRetrieveNodeAddress)?;
+        let node_addr = self.node.net().node_addr().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotRetrieveNodeAddress
+        })?;
         let addr_info = node_addr.info;
         let magic_endpoint = self.node.endpoint();
         let secret_key = magic_endpoint.secret_key();
@@ -241,11 +254,10 @@ impl OkuFs {
 
     /// Shuts down the Oku file system.
     pub async fn shutdown(self) -> miette::Result<()> {
-        Ok(self
-            .node
-            .shutdown()
-            .await
-            .map_err(|_e| OkuFsError::CannotStopNode)?)
+        Ok(self.node.shutdown().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotStopNode
+        })?)
     }
 
     /// Creates a new replica in the file system.
@@ -255,15 +267,15 @@ impl OkuFs {
     /// The ID of the new replica, being its public key.
     pub async fn create_replica(&self) -> miette::Result<NamespaceId> {
         let docs_client = &self.node.docs();
-        let new_document = docs_client
-            .create()
-            .await
-            .map_err(|_e| OkuFsError::CannotCreateReplica)?;
+        let new_document = docs_client.create().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotCreateReplica
+        })?;
         let document_id = new_document.id();
-        new_document
-            .close()
-            .await
-            .map_err(|_e| OkuFsError::CannotExitReplica)?;
+        new_document.close().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotExitReplica
+        })?;
         Ok(document_id)
     }
 
@@ -274,10 +286,10 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to delete.
     pub async fn delete_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
         let docs_client = &self.node.docs();
-        Ok(docs_client
-            .drop_doc(namespace_id)
-            .await
-            .map_err(|_e| OkuFsError::CannotDeleteReplica)?)
+        Ok(docs_client.drop_doc(namespace_id).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotDeleteReplica
+        })?)
     }
 
     /// Lists all replicas in the file system.
@@ -287,10 +299,10 @@ impl OkuFs {
     /// A list of all replicas in the file system.
     pub async fn list_replicas(&self) -> miette::Result<Vec<NamespaceId>> {
         let docs_client = &self.node.docs();
-        let replicas = docs_client
-            .list()
-            .await
-            .map_err(|_e| OkuFsError::CannotListReplicas)?;
+        let replicas = docs_client.list().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListReplicas
+        })?;
         pin_mut!(replicas);
         let replica_ids: Vec<NamespaceId> =
             replicas.map(|replica| replica.unwrap().0).collect().await;
@@ -302,10 +314,10 @@ impl OkuFs {
         namespace_id: NamespaceId,
     ) -> miette::Result<CapabilityKind> {
         let docs_client = &self.node.docs();
-        let replicas = docs_client
-            .list()
-            .await
-            .map_err(|_e| OkuFsError::CannotListReplicas)?;
+        let replicas = docs_client.list().await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListReplicas
+        })?;
         pin_mut!(replicas);
         let replicas_vec: Vec<(NamespaceId, CapabilityKind)> =
             replicas.map(|replica| replica.unwrap()).collect().await;
@@ -338,7 +350,10 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = if let Some(path) = path {
             let file_key = path_to_entry_prefix(path);
@@ -348,10 +363,10 @@ impl OkuFs {
         } else {
             iroh::docs::store::Query::single_latest_per_key().build()
         };
-        let entries = document
-            .get_many(query)
-            .await
-            .map_err(|_e| OkuFsError::CannotListFiles)?;
+        let entries = document.get_many(query).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListFiles
+        })?;
         pin_mut!(entries);
         let files: Vec<Entry> = entries.map(|entry| entry.unwrap()).collect().await;
         Ok(files)
@@ -382,12 +397,18 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
             .set_bytes(self.author_id, file_key, data_bytes)
             .await
-            .map_err(|_e| OkuFsError::CannotCreateOrModifyFile)?;
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotCreateOrModifyFile
+            })?;
 
         Ok(entry_hash)
     }
@@ -413,7 +434,10 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = iroh::docs::store::Query::single_latest_per_key()
             .key_exact(file_key.clone())
@@ -421,12 +445,15 @@ impl OkuFs {
         let entry = document
             .get_one(query)
             .await
-            .map_err(|_e| OkuFsError::CannotReadFile)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotReadFile
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let entries_deleted = document
-            .del(entry.author(), file_key)
-            .await
-            .map_err(|_e| OkuFsError::CannotDeleteFile)?;
+        let entries_deleted = document.del(entry.author(), file_key).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotDeleteFile
+        })?;
         Ok(entries_deleted)
     }
 
@@ -451,7 +478,10 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = iroh::docs::store::Query::single_latest_per_key()
             .key_exact(file_key)
@@ -459,7 +489,10 @@ impl OkuFs {
         let entry = document
             .get_one(query)
             .await
-            .map_err(|_e| OkuFsError::CannotReadFile)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotReadFile
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         Ok(entry)
     }
@@ -474,13 +507,16 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = iroh::docs::store::Query::all().key_exact(file_key).build();
-        let entries = document
-            .get_many(query)
-            .await
-            .map_err(|_e| OkuFsError::CannotListFiles)?;
+        let entries = document.get_many(query).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListFiles
+        })?;
         pin_mut!(entries);
         let timestamps: Vec<u64> = entries
             .map(|entry| entry.unwrap().timestamp())
@@ -498,12 +534,8 @@ impl OkuFs {
         let mut timestamps: Vec<u64> = Vec::new();
         for file in files {
             timestamps.push(
-                self.get_oldest_entry_timestamp(
-                    namespace_id,
-                    PathBuf::from_str(std::str::from_utf8(file.key()).into_diagnostic()?)
-                        .into_diagnostic()?,
-                )
-                .await?,
+                self.get_oldest_entry_timestamp(namespace_id, entry_key_to_path(file.key())?)
+                    .await?,
             );
         }
         Ok(*timestamps.iter().min().unwrap_or(&u64::MIN))
@@ -585,10 +617,10 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Bytes> {
         let entry = self.get_entry(namespace_id, path).await?;
-        Ok(entry
-            .content_bytes(self.node.client())
-            .await
-            .map_err(|_e| OkuFsError::CannotReadFile)?)
+        Ok(entry.content_bytes(self.node.client()).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotReadFile
+        })?)
     }
 
     /// Moves a file by copying it to a new location and deleting the original.
@@ -632,9 +664,7 @@ impl OkuFs {
         let mut moved_file_hashes = Vec::new();
         let old_directory_files = self.list_files(from_namespace_id, Some(from_path)).await?;
         for old_directory_file in old_directory_files {
-            let old_file_path =
-                PathBuf::from_str(std::str::from_utf8(old_directory_file.key()).into_diagnostic()?)
-                    .into_diagnostic()?;
+            let old_file_path = entry_key_to_path(old_directory_file.key())?;
             let new_file_path = to_path.join(old_file_path.file_name().unwrap_or_default());
             let file_move_info = self
                 .move_file(
@@ -672,26 +702,36 @@ impl OkuFs {
         let document = docs_client
             .open(namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let mut entries_deleted = 0;
         let query = iroh::docs::store::Query::single_latest_per_key()
             .key_prefix(file_key)
             .build();
-        let entries = document
-            .get_many(query)
-            .await
-            .map_err(|_e| OkuFsError::CannotListFiles)?;
+        let entries = document.get_many(query).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListFiles
+        })?;
         pin_mut!(entries);
         let files: Vec<Entry> = entries.map(|entry| entry.unwrap()).collect().await;
         for file in files {
             entries_deleted += document
                 .del(
                     file.author(),
-                    format!("{}", std::str::from_utf8(file.key()).unwrap_or_default()),
+                    format!(
+                        "{}",
+                        std::str::from_utf8(&path_to_entry_prefix(entry_key_to_path(file.key())?))
+                            .into_diagnostic()?
+                    ),
                 )
                 .await
-                .map_err(|_e| OkuFsError::CannotDeleteDirectory)?;
+                .map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotDeleteDirectory
+                })?;
         }
         Ok(entries_deleted)
     }
@@ -718,19 +758,25 @@ impl OkuFs {
         let document = docs_client
             .open(request.namespace_id)
             .await
-            .map_err(|_e| OkuFsError::CannotOpenReplica)?
+            .map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotOpenReplica
+            })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         match request.path {
             None => {
                 let document_ticket = document
                     .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
                     .await
-                    .map_err(|_e| OkuDiscoveryError::CannotGenerateSharingTicket)?;
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuDiscoveryError::CannotGenerateSharingTicket
+                    })?;
                 let query = iroh::docs::store::Query::single_latest_per_key().build();
-                let entries = document
-                    .get_many(query)
-                    .await
-                    .map_err(|_e| OkuFsError::CannotListFiles)?;
+                let entries = document.get_many(query).await.map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotListFiles
+                })?;
                 pin_mut!(entries);
                 let file_sizes: Vec<u64> = entries
                     .map(|entry| entry.unwrap().content_len())
@@ -748,10 +794,10 @@ impl OkuFs {
                 let query = iroh::docs::store::Query::single_latest_per_key()
                     .key_prefix(entry_prefix)
                     .build();
-                let entries = document
-                    .get_many(query)
-                    .await
-                    .map_err(|_e| OkuFsError::CannotListFiles)?;
+                let entries = document.get_many(query).await.map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotListFiles
+                })?;
                 pin_mut!(entries);
                 let entry_hashes_and_sizes: Vec<(Hash, u64)> = entries
                     .map(|entry| {
@@ -771,7 +817,10 @@ impl OkuFs {
                         )
                     }))
                     .await
-                    .map_err(|_e| OkuDiscoveryError::CannotGenerateSharingTicketForFiles)?;
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuDiscoveryError::CannotGenerateSharingTicketForFiles
+                    })?;
                 let content_length = entry_hashes_and_sizes
                     .iter()
                     .map(|entry| entry.1)
