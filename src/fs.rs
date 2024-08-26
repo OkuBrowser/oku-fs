@@ -978,6 +978,54 @@ impl OkuFs {
         }
     }
 
+    /// Retrieve a file locally, or attempt to retrieve it from the Internet if not available locally.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the file to retrieve.
+    ///
+    /// * `path` - The path to the file to retrieve.
+    ///
+    /// * `partial` - If retrieving externally, whether to discover peers who claim to only have a partial copy of the replica.
+    ///
+    /// * `verified` - If retrieving externally, whether to discover peers who have been verified to have the replica.
+    ///
+    /// # Returns
+    ///
+    /// The data read from the file.
+    pub async fn read_local_or_external_file(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+        partial: bool,
+        verified: bool,
+    ) -> miette::Result<Bytes> {
+        match self.list_replicas().await {
+            Ok(replicas_list) => match replicas_list.contains(&namespace_id) {
+                true => match self.read_file(namespace_id, path.clone()).await {
+                    Ok(file_bytes) => Ok(file_bytes),
+                    Err(e) => {
+                        error!("{}", e);
+                        self.get_external_replica(namespace_id, None, partial, verified)
+                            .await?;
+                        Ok(self.read_file(namespace_id, path).await?)
+                    }
+                },
+                false => {
+                    self.get_external_replica(namespace_id, None, partial, verified)
+                        .await?;
+                    Ok(self.read_file(namespace_id, path).await?)
+                }
+            },
+            Err(e) => {
+                error!("{}", e);
+                self.get_external_replica(namespace_id, None, partial, verified)
+                    .await?;
+                Ok(self.read_file(namespace_id, path).await?)
+            }
+        }
+    }
+
     /// Joins a swarm to fetch the latest version of a replica and save it to the local machine.
     ///
     /// # Arguments
@@ -1109,6 +1157,7 @@ impl OkuFs {
                 stream.flush().await.into_diagnostic()?;
             }
         }
+        #[allow(unreachable_code)]
         Ok(())
     }
 }
