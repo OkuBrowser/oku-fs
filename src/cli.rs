@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use iroh::docs::NamespaceId;
+use iroh::base::ticket::Ticket;
+use iroh::{client::docs::ShareMode, docs::NamespaceId};
 use miette::IntoDiagnostic;
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;
@@ -41,6 +42,15 @@ enum Commands {
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
         /// The optional path of the directory to list files from.
         path: Option<PathBuf>,
+    },
+    /// Create a ticket with which a replica can be retrieved.
+    Share {
+        #[arg(short, long, value_name = "REPLICA_ID")]
+        /// The ID of the replica to share.
+        replica_id: NamespaceId,
+        #[arg(short, long, value_name = "SHARE_MODE", default_value_t = ShareMode::Read)]
+        /// Whether the replica should be shared as read-only, or if read & write permissions are to be shared.
+        share_mode: ShareMode,
     },
     /// List local replicas.
     ListReplicas,
@@ -177,6 +187,13 @@ async fn main() -> miette::Result<()> {
         Some(Commands::ListFiles { replica_id, path }) => {
             let files = node.list_files(replica_id, path).await?;
             println!("Files: {:#?}", files);
+        }
+        Some(Commands::Share {
+            replica_id,
+            share_mode,
+        }) => {
+            let ticket = node.create_document_ticket(replica_id, share_mode).await?;
+            println!("{}", ticket.serialize());
         }
         Some(Commands::ListReplicas) => {
             let replicas = node.list_replicas().await?;

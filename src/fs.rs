@@ -11,7 +11,7 @@ use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::BlobTicket;
 use iroh::client::docs::Entry;
-use iroh::docs::CapabilityKind;
+use iroh::docs::{CapabilityKind, DocTicket};
 use iroh::net::discovery::dns::DnsDiscovery;
 use iroh::net::discovery::pkarr::PkarrPublisher;
 use iroh::{
@@ -855,6 +855,49 @@ impl OkuFs {
     /// A handle referencing the mounted file system; joining or dropping the handle will unmount the file system and shutdown the node.
     pub fn mount(&self, path: PathBuf) -> miette::Result<fuser::BackgroundSession> {
         Ok(spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()?)
+    }
+
+    /// Create a sharing ticket for a given replica.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica to share.
+    ///
+    /// * `share_mode` - Whether the replica should be shared as read-only, or if read & write permissions are to be shared.
+    ///
+    /// # Returns
+    ///
+    /// A ticket to retrieve the given replica with the requested permissions.
+    pub async fn create_document_ticket(
+        &self,
+        namespace_id: NamespaceId,
+        share_mode: ShareMode,
+    ) -> miette::Result<DocTicket> {
+        if matches!(share_mode, ShareMode::Write)
+            && matches!(
+                self.get_replica_capability(namespace_id.clone()).await?,
+                CapabilityKind::Read
+            )
+        {
+            Err(OkuFsError::CannotShareReplicaWriteable(namespace_id).into())
+        } else {
+            let docs_client = &self.node.docs();
+            let document = docs_client
+                .open(namespace_id)
+                .await
+                .map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotOpenReplica
+                })?
+                .ok_or(OkuFsError::FsEntryNotFound)?;
+            Ok(document
+                .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+                .await
+                .map_err(|e| {
+                    error!("{}", e);
+                    OkuDiscoveryError::CannotGenerateSharingTicket
+                })?)
+        }
     }
 
     /// Respond to requests for content from peers.

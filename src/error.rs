@@ -1,3 +1,4 @@
+use iroh::docs::NamespaceId;
 use miette::Diagnostic;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -81,6 +82,10 @@ pub enum OkuFsError {
     #[diagnostic(code(fs::cannot_delete_directory), url(docsrs))]
     /// Cannot delete directory.
     CannotDeleteDirectory,
+    #[error("Cannot share replica as writeable when it is read-only ({0}).")]
+    #[diagnostic(code(fs::cannot_share_replica_writeable), url(docsrs))]
+    /// Cannot delete directory.
+    CannotShareReplicaWriteable(NamespaceId),
 }
 
 #[derive(Error, Debug, Diagnostic)]
