@@ -17,7 +17,7 @@ use iroh::net::discovery::pkarr::PkarrPublisher;
 use iroh::{
     base::hash::Hash,
     client::docs::ShareMode,
-    docs::{Author, AuthorId, NamespaceId},
+    docs::{Author, NamespaceId},
     net::discovery::{ConcurrentDiscovery, Discovery},
     node::FsNode,
 };
@@ -39,7 +39,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
-use tracing::error;
+use tracing::{error, info};
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
@@ -120,8 +120,6 @@ pub struct OkuFsConfig {
 pub struct OkuFs {
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     pub(crate) node: FsNode,
-    /// The public key of the author of the file system.
-    pub(crate) author_id: AuthorId,
     /// The configuration of the file system.
     pub(crate) config: OkuFsConfig,
     #[cfg(feature = "fuse")]
@@ -167,24 +165,29 @@ impl OkuFs {
         })?;
         futures::pin_mut!(authors);
         let authors_count = authors.as_mut().count().await.to_owned();
-        let author_id = if authors_count == 0 {
-            node.authors().create().await.map_err(|e| {
+        let default_author_id = if authors_count == 0 {
+            let new_author_id = node.authors().create().await.map_err(|e| {
                 error!("{}", e);
                 OkuFsError::AuthorCannotBeCreated
-            })?
-        } else {
-            let authors = node.authors().list().await.map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotRetrieveAuthors
             })?;
-            futures::pin_mut!(authors);
-            let authors_list: Vec<AuthorId> = authors.map(|author| author.unwrap()).collect().await;
-            authors_list[0]
+            node.authors()
+                .set_default(new_author_id)
+                .await
+                .map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::AuthorCannotBeCreated
+                })?;
+            new_author_id
+        } else {
+            node.authors().default().await.map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotRetrieveDefaultAuthor
+            })?
         };
+        info!("Default author ID is {} … ", default_author_id.fmt_short());
         let config = load_or_create_config()?;
         let oku_fs = OkuFs {
             node,
-            author_id,
             config,
             #[cfg(feature = "fuse")]
             fs_handles: Arc::new(RwLock::new(HashMap::new())),
@@ -426,7 +429,14 @@ impl OkuFs {
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
-            .set_bytes(self.author_id, file_key, data_bytes)
+            .set_bytes(
+                self.node.authors().default().await.map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotRetrieveDefaultAuthor
+                })?,
+                file_key,
+                data_bytes,
+            )
             .await
             .map_err(|e| {
                 error!("{}", e);

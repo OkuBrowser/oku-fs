@@ -11,3 +11,5 @@ pub mod fs;
 #[cfg(feature = "fuse")]
 /// FUSE implementation.
 pub mod fuse;
+/// Authorisation utilities.
+pub mod ucan;

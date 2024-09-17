@@ -17,6 +17,14 @@ pub enum OkuFsError {
     #[diagnostic(code(fs::author_cannot_be_created), url(docsrs))]
     /// Author cannot be created.
     AuthorCannotBeCreated,
+    #[error("Author cannot be set as default.")]
+    #[diagnostic(code(fs::author_cannot_be_set_as_default), url(docsrs))]
+    /// Author cannot be set as default.
+    AuthorCannotBeSetAsDefault,
+    #[error("Cannot retrieve default author.")]
+    #[diagnostic(code(fs::cannot_retrieve_default_author), url(docsrs))]
+    /// Cannot retrieve default author.
+    CannotRetrieveDefaultAuthor,
     #[error("Cannot start node.")]
     #[diagnostic(code(fs::cannot_start_node), url(docsrs))]
     /// Cannot start node.
