@@ -201,7 +201,7 @@ async fn main() -> miette::Result<()> {
                 "Replicas: {:#?}",
                 replicas
                     .iter()
-                    .map(|replica| replica.to_string())
+                    .map(|replica| replica.0.to_string())
                     .collect::<Vec<String>>()
             );
         }

@@ -554,7 +554,7 @@ impl FilesystemMT for OkuFs {
                         self.handle.block_on(async { self.list_replicas().await });
                     match replicas_result {
                         Ok(replicas) => {
-                            for replica in replicas {
+                            for (replica, _capability_kind) in replicas {
                                 directory_entries.push(DirectoryEntry {
                                     name: replica.to_string().into(),
                                     kind: fuse_mt::FileType::Directory,
@@ -597,7 +597,7 @@ impl FilesystemMT for OkuFs {
         let file_count = self.handle.block_on(async {
             let mut file_count = 0u64;
             if let Ok(replicas) = self.list_replicas().await {
-                for replica in replicas {
+                for (replica, _capability_kind) in replicas {
                     if let Ok(files) = self.list_files(replica, None).await {
                         file_count += files.len().try_into().unwrap_or(0);
                     }

@@ -325,15 +325,15 @@ impl OkuFs {
     /// # Returns
     ///
     /// A list of all replicas in the file system.
-    pub async fn list_replicas(&self) -> miette::Result<Vec<NamespaceId>> {
+    pub async fn list_replicas(&self) -> miette::Result<Vec<(NamespaceId, CapabilityKind)>> {
         let docs_client = &self.node.docs();
         let replicas = docs_client.list().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotListReplicas
         })?;
         pin_mut!(replicas);
-        let replica_ids: Vec<NamespaceId> =
-            replicas.map(|replica| replica.unwrap().0).collect().await;
+        let replica_ids: Vec<(NamespaceId, CapabilityKind)> =
+            replicas.map(|replica| replica.unwrap()).collect().await;
         Ok(replica_ids)
     }
 
@@ -350,14 +350,7 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
     ) -> miette::Result<CapabilityKind> {
-        let docs_client = &self.node.docs();
-        let replicas = docs_client.list().await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotListReplicas
-        })?;
-        pin_mut!(replicas);
-        let replicas_vec: Vec<(NamespaceId, CapabilityKind)> =
-            replicas.map(|replica| replica.unwrap()).collect().await;
+        let replicas_vec = self.list_replicas().await?;
         match replicas_vec
             .iter()
             .find(|replica| replica.0 == namespace_id)
@@ -615,7 +608,7 @@ impl OkuFs {
     pub async fn get_oldest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
-        for replica in replicas {
+        for (replica, _capability_kind) in replicas {
             timestamps.push(
                 self.get_oldest_timestamp_in_folder(replica, PathBuf::from("/"))
                     .await?,
@@ -656,7 +649,7 @@ impl OkuFs {
     pub async fn get_newest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
-        for replica in replicas {
+        for (replica, _capability_kind) in replicas {
             timestamps.push(
                 self.get_newest_timestamp_in_folder(replica, PathBuf::from("/"))
                     .await?,
@@ -697,7 +690,7 @@ impl OkuFs {
     pub async fn get_size(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut size = 0;
-        for replica in replicas {
+        for (replica, _capability_kind) in replicas {
             size += self.get_folder_size(replica, PathBuf::from("/")).await?;
         }
         Ok(size)
@@ -1197,8 +1190,8 @@ impl OkuFs {
                     }
                 }
             }
-            replica_sender.send_replace(());
         }
+        replica_sender.send_replace(());
         Ok(())
     }
 
@@ -1229,8 +1222,8 @@ impl OkuFs {
                 continue;
             }
             docs_client.import(ticket).await?;
-            replica_sender.send_replace(());
         }
+        replica_sender.send_replace(());
         Ok(())
     }
 
