@@ -8,7 +8,6 @@ use iroh::{
 use iroh_mainline_content_discovery::announce_dht;
 use miette::IntoDiagnostic;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::{collections::BTreeSet, error::Error, str::FromStr, time::Duration};
 use tracing::error;
 
@@ -103,8 +102,6 @@ impl FromStr for ContentRequest {
 pub enum PeerTicketResponse {
     /// A ticket pointing to a replica.
     Document(DocTicket),
-    /// A list of tickets pointing to files.
-    Entries(Vec<BlobTicket>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -112,8 +109,6 @@ pub enum PeerTicketResponse {
 pub struct PeerContentRequest {
     /// The ID of a requested replica.
     pub namespace_id: NamespaceId,
-    /// An optional path of requested files within the replica.
-    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

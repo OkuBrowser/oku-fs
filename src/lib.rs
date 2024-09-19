@@ -13,3 +13,5 @@ pub mod fs;
 pub mod fuse;
 /// Authorisation utilities.
 pub mod ucan;
+
+pub use iroh;

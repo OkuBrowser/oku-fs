@@ -4,13 +4,14 @@ use crate::discovery::{
 };
 use crate::error::{OkuDiscoveryError, OkuFuseError, OkuRelayError};
 use crate::{discovery::ContentRequest, error::OkuFsError};
+use anyhow::anyhow;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
-use iroh::base::ticket::BlobTicket;
 use iroh::client::docs::Entry;
+use iroh::docs::store::FilterKind;
 use iroh::docs::{CapabilityKind, DocTicket};
 use iroh::net::discovery::dns::DnsDiscovery;
 use iroh::net::discovery::pkarr::PkarrPublisher;
@@ -39,6 +40,8 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
+use tokio::sync::watch::{self, Sender};
+use tokio::sync::Mutex;
 use tracing::{error, info};
 
 /// The path on disk where the file system is stored.
@@ -122,6 +125,8 @@ pub struct OkuFs {
     pub(crate) node: FsNode,
     /// The configuration of the file system.
     pub(crate) config: OkuFsConfig,
+    /// A watcher for when replicas are created, deleted, or imported.
+    pub replica_sender: Sender<()>,
     #[cfg(feature = "fuse")]
     /// The handles pointing to paths within the file system; used by FUSE.
     pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,
@@ -145,7 +150,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<OkuFs> {
+    pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<Self> {
         let node_path = PathBuf::from(FS_PATH).join("node");
         let node = FsNode::persistent(node_path)
             .await
@@ -186,9 +191,13 @@ impl OkuFs {
         };
         info!("Default author ID is {} … ", default_author_id.fmt_short());
         let config = load_or_create_config()?;
-        let oku_fs = OkuFs {
+
+        let (replica_sender, _replica_receiver) = watch::channel(());
+
+        let oku_fs = Self {
             node,
             config,
+            replica_sender,
             #[cfg(feature = "fuse")]
             fs_handles: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "fuse")]
@@ -293,6 +302,7 @@ impl OkuFs {
             error!("{}", e);
             OkuFsError::CannotExitReplica
         })?;
+        self.replica_sender.send_replace(());
         Ok(document_id)
     }
 
@@ -303,6 +313,7 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to delete.
     pub async fn delete_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
         let docs_client = &self.node.docs();
+        self.replica_sender.send_replace(());
         Ok(docs_client.drop_doc(namespace_id).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotDeleteReplica
@@ -922,76 +933,28 @@ impl OkuFs {
                 OkuFsError::CannotOpenReplica
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        match request.path {
-            None => {
-                let document_ticket = document
-                    .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuDiscoveryError::CannotGenerateSharingTicket
-                    })?;
-                let query = iroh::docs::store::Query::single_latest_per_key().build();
-                let entries = document.get_many(query).await.map_err(|e| {
-                    error!("{}", e);
-                    OkuFsError::CannotListFiles
-                })?;
-                pin_mut!(entries);
-                let file_sizes: Vec<u64> = entries
-                    .map(|entry| entry.unwrap().content_len())
-                    .collect()
-                    .await;
-                let content_length = file_sizes.iter().sum();
-                Ok(PeerContentResponse {
-                    ticket_response: PeerTicketResponse::Document(document_ticket),
-                    content_size: content_length,
-                })
-            }
-            Some(blob_path) => {
-                let blobs_client = &self.node.blobs();
-                let entry_prefix = path_to_entry_key(blob_path);
-                let query = iroh::docs::store::Query::single_latest_per_key()
-                    .key_prefix(entry_prefix)
-                    .build();
-                let entries = document.get_many(query).await.map_err(|e| {
-                    error!("{}", e);
-                    OkuFsError::CannotListFiles
-                })?;
-                pin_mut!(entries);
-                let entry_hashes_and_sizes: Vec<(Hash, u64)> = entries
-                    .map(|entry| {
-                        (
-                            entry.as_ref().unwrap().content_hash(),
-                            entry.unwrap().content_len(),
-                        )
-                    })
-                    .collect()
-                    .await;
-                let entry_tickets: Vec<BlobTicket> =
-                    futures::future::try_join_all(entry_hashes_and_sizes.iter().map(|entry| {
-                        blobs_client.share(
-                            entry.0,
-                            iroh::base::hash::BlobFormat::Raw,
-                            iroh::base::node_addr::AddrInfoOptions::RelayAndAddresses,
-                        )
-                    }))
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuDiscoveryError::CannotGenerateSharingTicketForFiles
-                    })?;
-                let content_length = entry_hashes_and_sizes
-                    .iter()
-                    .map(|entry| entry.1)
-                    .collect::<Vec<u64>>()
-                    .iter()
-                    .sum();
-                Ok(PeerContentResponse {
-                    ticket_response: PeerTicketResponse::Entries(entry_tickets),
-                    content_size: content_length,
-                })
-            }
-        }
+        let document_ticket = document
+            .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+            .await
+            .map_err(|e| {
+                error!("{}", e);
+                OkuDiscoveryError::CannotGenerateSharingTicket
+            })?;
+        let query = iroh::docs::store::Query::single_latest_per_key().build();
+        let entries = document.get_many(query).await.map_err(|e| {
+            error!("{}", e);
+            OkuFsError::CannotListFiles
+        })?;
+        pin_mut!(entries);
+        let file_sizes: Vec<u64> = entries
+            .map(|entry| entry.unwrap().content_len())
+            .collect()
+            .await;
+        let content_length = file_sizes.iter().sum();
+        Ok(PeerContentResponse {
+            ticket_response: PeerTicketResponse::Document(document_ticket),
+            content_size: content_length,
+        })
     }
 
     /// Handles incoming requests for document tickets.
@@ -1031,74 +994,27 @@ impl OkuFs {
         }
     }
 
-    /// Retrieve a file locally, or attempt to retrieve it from the Internet if not available locally.
-    ///
-    /// # Arguments
-    ///
-    /// * `namespace_id` - The ID of the replica containing the file to retrieve.
-    ///
-    /// * `path` - The path to the file to retrieve.
-    ///
-    /// * `partial` - If retrieving externally, whether to discover peers who claim to only have a partial copy of the replica.
-    ///
-    /// * `verified` - If retrieving externally, whether to discover peers who have been verified to have the replica.
-    ///
-    /// # Returns
-    ///
-    /// The data read from the file.
-    pub async fn read_local_or_external_file(
-        &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
-        partial: bool,
-        verified: bool,
-    ) -> miette::Result<Bytes> {
-        match self.list_replicas().await {
-            Ok(replicas_list) => match replicas_list.contains(&namespace_id) {
-                true => match self.read_file(namespace_id, path.clone()).await {
-                    Ok(file_bytes) => Ok(file_bytes),
-                    Err(e) => {
-                        error!("{}", e);
-                        self.get_external_replica(namespace_id, None, partial, verified)
-                            .await?;
-                        Ok(self.read_file(namespace_id, path).await?)
-                    }
-                },
-                false => {
-                    self.get_external_replica(namespace_id, None, partial, verified)
-                        .await?;
-                    Ok(self.read_file(namespace_id, path).await?)
-                }
-            },
-            Err(e) => {
-                error!("{}", e);
-                self.get_external_replica(namespace_id, None, partial, verified)
-                    .await?;
-                Ok(self.read_file(namespace_id, path).await?)
-            }
-        }
-    }
-
-    /// Joins a swarm to fetch the latest version of a replica and save it to the local machine.
+    /// Use the mainline DHT to obtain tickets for the replica with the given ID.
     ///
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to fetch.
     ///
-    /// * `path` - An optional path of requested files within the replica.
-    ///
     /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
     ///
     /// * `verified` - Whether to discover peers who have been verified to have the replica.
-    pub async fn get_external_replica(
+    ///
+    /// # Returns
+    ///
+    /// A list of tickets for the replica with the given ID.
+    pub async fn resolve_namespace_id(
         &self,
         namespace_id: NamespaceId,
-        path: Option<PathBuf>,
         partial: bool,
         verified: bool,
-    ) -> miette::Result<()> {
+    ) -> anyhow::Result<Vec<DocTicket>> {
         let content = ContentRequest::Hash(Hash::new(namespace_id));
-        let dht = mainline::Dht::server().into_diagnostic()?;
+        let dht = mainline::Dht::server()?;
         let q = Query {
             content: content.hash_and_format(),
             flags: QueryFlags {
@@ -1107,20 +1023,15 @@ impl OkuFs {
             },
         };
         let info_hash = to_infohash(q.content);
-        let peer_content_request = PeerContentRequest { namespace_id, path };
-        let peer_content_request_string =
-            serde_json::to_string(&peer_content_request).into_diagnostic()?;
-        let docs_client = self.node.docs();
+        let peer_content_request = PeerContentRequest { namespace_id };
+        let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
 
-        let mut addrs = dht.get_peers(info_hash).into_diagnostic()?;
+        let mut addrs = dht.get_peers(info_hash)?;
+        let tickets: Arc<Mutex<Vec<DocTicket>>> = Arc::new(Mutex::new(Vec::new()));
         for peer_response in &mut addrs {
             for peer in peer_response {
-                if docs_client.open(namespace_id).await.is_ok() {
-                    break;
-                }
                 let peer_content_request_string = peer_content_request_string.clone();
-                let docs_client = docs_client.clone();
-                let self_clone = self.clone();
+                let tickets_clone = tickets.clone();
                 tokio::spawn(async move {
                     let mut stream = TcpStream::connect(peer).await?;
                     let mut request = Vec::new();
@@ -1141,32 +1052,153 @@ impl OkuFs {
                             if document_ticket.capability.id() != namespace_id {
                                 return Ok::<(), Box<dyn Error + Send + Sync>>(());
                             }
-                            // let docs_client = &self.node.docs;
-                            docs_client.import(document_ticket).await?;
-                            Ok::<(), Box<dyn Error + Send + Sync>>(())
-                        }
-                        PeerTicketResponse::Entries(entry_tickets) => {
-                            let blobs_client = &self_clone.node.blobs();
-                            for blob_ticket in entry_tickets {
-                                let ticket_parts = blob_ticket.into_parts();
-                                // let blob_download_request = BlobDownloadRequest {
-                                //     hash: ticket_parts.1,
-                                //     format: ticket_parts.2,
-                                //     peer: ticket_parts.0,
-                                //     tag: iroh::blobs::util::SetTagOption::Auto,
-                                // };
-                                blobs_client
-                                    .download(ticket_parts.1, ticket_parts.0)
-                                    .await?;
-                                // break;
-                            }
+                            tickets_clone.lock().await.push(document_ticket);
                             Ok::<(), Box<dyn Error + Send + Sync>>(())
                         }
                     }
                 });
             }
         }
+        Ok(tickets.lock_owned().await.to_vec())
+    }
 
+    /// Retrieve a file locally after attempting to retrieve the latest version from the Internet.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica containing the file to retrieve.
+    ///
+    /// * `path` - The path to the file to retrieve.
+    ///
+    /// * `partial` - If retrieving externally, whether to discover peers who claim to only have a partial copy of the replica.
+    ///
+    /// * `verified` - If retrieving externally, whether to discover peers who have been verified to have the replica.
+    ///
+    /// # Returns
+    ///
+    /// The data read from the file.
+    pub async fn fetch_file(
+        &self,
+        namespace_id: NamespaceId,
+        path: PathBuf,
+        partial: bool,
+        verified: bool,
+    ) -> anyhow::Result<Bytes> {
+        match self
+            .resolve_namespace_id(namespace_id.clone(), partial, verified)
+            .await
+        {
+            Ok(tickets) => Ok(self.fetch_file_with_tickets(tickets, path).await?),
+            Err(e) => {
+                error!("{}", e);
+                Ok(self
+                    .read_file(namespace_id, path)
+                    .await
+                    .map_err(|e| anyhow!("{}", e))?)
+            }
+        }
+    }
+
+    /// Join a swarm to fetch the latest version of a file and save it to the local machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `tickets` - Tickets for the replica containing the file to retrieve.
+    ///
+    /// * `path` - The path to the file to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// The data read from the file.
+    pub async fn fetch_file_with_tickets(
+        &self,
+        tickets: Vec<DocTicket>,
+        path: PathBuf,
+    ) -> anyhow::Result<Bytes> {
+        let docs_client = &self.node.docs();
+        let namespace_id = tickets
+            .first()
+            .ok_or(anyhow!("No tickets to fetch {:?} with … ", path))?
+            .capability
+            .id();
+        for ticket in tickets {
+            if ticket.capability.id() != namespace_id {
+                return Err(anyhow!(
+                    "Tickets are for two different replicas ({} is not {}) … ",
+                    ticket.capability.id().to_string(),
+                    namespace_id.to_string()
+                ));
+            }
+            let replica = docs_client
+                .import_namespace(ticket.capability.clone())
+                .await?;
+            let filter = FilterKind::Exact(path_to_entry_key(path.clone()));
+            replica
+                .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
+                    filter,
+                ]))
+                .await?;
+            replica.start_sync(ticket.nodes).await?;
+        }
+        Ok(self
+            .read_file(namespace_id, path)
+            .await
+            .map_err(|e| anyhow!("{}", e))?)
+    }
+
+    /// Join a swarm to fetch the latest version of a replica and save it to the local machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica to fetch.
+    ///
+    /// * `path` - An optional path of requested files within the replica.
+    ///
+    /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
+    ///
+    /// * `verified` - Whether to discover peers who have been verified to have the replica.
+    pub async fn fetch_replica(
+        &self,
+        namespace_id: NamespaceId,
+        path: Option<PathBuf>,
+        partial: bool,
+        verified: bool,
+    ) -> anyhow::Result<()> {
+        let tickets = self
+            .resolve_namespace_id(namespace_id, partial, verified)
+            .await?;
+        let docs_client = self.node.docs();
+        let replica_sender = self.replica_sender.clone();
+        for ticket in tickets {
+            if ticket.capability.id() != namespace_id {
+                continue;
+            }
+            match path.clone() {
+                Some(path) => {
+                    let replica = docs_client.import_namespace(ticket.capability).await?;
+                    let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+                    replica
+                        .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(
+                            vec![filter],
+                        ))
+                        .await?;
+                    replica.start_sync(ticket.nodes).await?;
+                }
+                None => {
+                    if let Some(replica) = docs_client.open(ticket.capability.id()).await? {
+                        replica
+                            .set_download_policy(
+                                iroh::docs::store::DownloadPolicy::EverythingExcept(vec![]),
+                            )
+                            .await?;
+                        replica.start_sync(ticket.nodes).await?;
+                    } else {
+                        docs_client.import(ticket).await?;
+                    }
+                }
+            }
+            replica_sender.send_replace(());
+        }
         Ok(())
     }
 

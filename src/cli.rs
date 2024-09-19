@@ -2,7 +2,7 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use iroh::base::ticket::Ticket;
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
-use miette::IntoDiagnostic;
+use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
@@ -258,8 +258,9 @@ async fn main() -> miette::Result<()> {
             );
         }
         Some(Commands::GetReplica { replica_id, path }) => {
-            node.get_external_replica(replica_id, path.clone(), true, true)
-                .await?;
+            node.fetch_replica(replica_id, path.clone(), true, true)
+                .await
+                .map_err(|e| miette!("{}", e))?;
             let files = node.list_files(replica_id, path).await?;
             println!("Files: {:#?}", files);
         }
