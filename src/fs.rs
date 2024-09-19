@@ -1202,6 +1202,38 @@ impl OkuFs {
         Ok(())
     }
 
+    /// Join a swarm to fetch the latest version of a replica and save it to the local machine.
+    ///
+    /// If a version of the replica already exists locally, only the last-fetched paths will be fetched.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica to fetch.
+    ///
+    /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
+    ///
+    /// * `verified` - Whether to discover peers who have been verified to have the replica.
+    pub async fn sync_replica(
+        &self,
+        namespace_id: NamespaceId,
+        partial: bool,
+        verified: bool,
+    ) -> anyhow::Result<()> {
+        let tickets = self
+            .resolve_namespace_id(namespace_id, partial, verified)
+            .await?;
+        let docs_client = self.node.docs();
+        let replica_sender = self.replica_sender.clone();
+        for ticket in tickets {
+            if ticket.capability.id() != namespace_id {
+                continue;
+            }
+            docs_client.import(ticket).await?;
+            replica_sender.send_replace(());
+        }
+        Ok(())
+    }
+
     /// Connects to a relay to facilitate communication behind NAT.
     /// Upon connecting, the file system will send a list of all replicas to the relay. Periodically, the relay will request the list of replicas again using the same connection.
     ///
