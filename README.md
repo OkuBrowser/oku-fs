@@ -31,5 +31,18 @@ To solve this, a relay node is used. These relay nodes:
 - Perform DHT announcements on behalf of the connected nodes behind NAT.
 - Facilitate ticket exchanges between the appropriate connected nodes and external nodes.
 
-To enable this functionality, relay nodes maintain a list of which replicas are held by which nodes behind NAT.
-When an external node requests a replica, said external node connects to the relay node, and the relay node finds the appropriate connected node and begins acting as a middleman during the ticket exchange.
+To enable this functionality, relay nodes maintain a mapping of replicas to a list of nodes behind NAT.\
+When an external node requests a replica:
+1. Said external node connects to the relay node
+2. The relay node finds all connected nodes with that replica and asks each of them for tickets
+3. The relay node constructs a read-only ticket with all of the node addresses in the tickets each connected node provided
+4. The relay node sends the constructed ticket to the external node
+
+Note: When replicas are requested from a DHT, an estimated content size is provided. The relay node provides the largest estimate from its connected nodes.
+
+#### Hole punching
+
+It may seem unclear how a ticket allows an external node to connect to a node behind NAT if the relay is only facilitating ticket exchange.
+The relay node described above only performs hole-punching for content discovery; N0, Inc maintains a [network of Iroh nodes and relay servers](https://iroh.network/), with the [Iroh relay servers](https://docs.rs/iroh-net/latest/iroh_net/relay/server/struct.Server.html) facilitating hole punching during document syncing.
+
+The Iroh network's relay servers are currently free. When this is no longer the case, Oku relay nodes will be modified to also function as Iroh relay nodes, requiring Let's Encrypt TLS certificates.

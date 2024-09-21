@@ -1,10 +1,12 @@
+use crate::config::OkuFsConfig;
 use crate::discovery::{announce_replica, INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
 use crate::discovery::{
     PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
 };
-use crate::error::{OkuDiscoveryError, OkuFuseError, OkuRelayError};
+use crate::error::{OkuDiscoveryError, OkuFuseError};
 use crate::{discovery::ContentRequest, error::OkuFsError};
 use anyhow::anyhow;
+use async_recursion::async_recursion;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
@@ -27,13 +29,13 @@ use iroh_mainline_content_discovery::to_infohash;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::Arc;
 #[cfg(feature = "fuse")]
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::{error::Error, path::PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -107,13 +109,6 @@ pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
     let path = normalise_path(path.clone());
     let path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.into()
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-///  The configuration of the file system.
-pub struct OkuFsConfig {
-    /// An optional address to facilitate communication behind NAT.
-    pub relay_address: Option<String>,
 }
 
 /// An instance of an Oku file system.
@@ -190,7 +185,7 @@ impl OkuFs {
             })?
         };
         info!("Default author ID is {} … ", default_author_id.fmt_short());
-        let config = load_or_create_config()?;
+        let config = OkuFsConfig::load_or_create_config()?;
 
         let (replica_sender, _replica_receiver) = watch::channel(());
 
@@ -221,19 +216,7 @@ impl OkuFs {
         let docs_client = oku_fs.node.docs();
         let docs_client = docs_client.clone();
         let oku_fs_clone = oku_fs.clone();
-        if let Some(relay_address) = oku_fs_clone.config.relay_address {
-            let oku_fs_clone = oku_fs.clone();
-            tokio::spawn(async move {
-                oku_fs_clone
-                    .connect_to_relay(relay_address.to_string())
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuRelayError::ProblemConnecting(relay_address.to_string())
-                    })
-                    .unwrap();
-            });
-        }
+        oku_fs_clone.start_relay_connection(0).await?;
         let oku_fs_clone = oku_fs.clone();
         tokio::spawn(async move {
             oku_fs_clone
@@ -254,6 +237,35 @@ impl OkuFs {
             }
         });
         Ok(oku_fs.clone())
+    }
+
+    #[async_recursion]
+    /// Attempts to open a connection to a relay node, re-trying if unable to or if the connection fails at some point.
+    ///
+    /// # Arguments
+    ///
+    /// * `restarts` - The current number of attempts at connection; should be zero, as this is used for recursive calls.
+    pub async fn start_relay_connection(&self, restarts: usize) -> miette::Result<()> {
+        if let Some(relay_connection_config) = self.config.relay_connection_config()? {
+            let node = self.clone();
+            tokio::spawn(async move {
+                match node
+                    .connect_to_relay(relay_connection_config.relay_address()?)
+                    .await
+                {
+                    Ok(_) => Ok::<(), Box<dyn Error + Send + Sync>>(()),
+                    Err(e) => {
+                        error!("{}", e);
+                        if restarts < relay_connection_config.relay_connection_attempts()? {
+                            Ok(node.start_relay_connection(restarts + 1).await?)
+                        } else {
+                            Err(e.into())
+                        }
+                    }
+                }
+            });
+        }
+        Ok(())
     }
 
     /// Create a mechanism for discovering other nodes on the network given their IDs.
@@ -1294,27 +1306,6 @@ pub fn load_or_create_author() -> miette::Result<Author> {
             let author_bytes = author.to_bytes();
             std::fs::write(path, author_bytes).into_diagnostic()?;
             Ok(author)
-        }
-    }
-}
-
-/// Loads the configuration of the file system from disk, or creates a new configuration if none exists.
-///
-/// # Returns
-///
-/// The configuration of the file system.
-pub fn load_or_create_config() -> miette::Result<OkuFsConfig> {
-    let path = PathBuf::from(FS_PATH).join("config.toml");
-    let config_file_contents = std::fs::read_to_string(path.clone());
-    match config_file_contents {
-        Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml).into_diagnostic()?),
-        Err(_) => {
-            let config = OkuFsConfig {
-                relay_address: None,
-            };
-            let config_toml = toml::to_string(&config).into_diagnostic()?;
-            std::fs::write(path, config_toml).into_diagnostic()?;
-            Ok(config)
         }
     }
 }

@@ -2866,6 +2866,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-recursion",
  "async-trait",
  "bs58",
  "bytes",

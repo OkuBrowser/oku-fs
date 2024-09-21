@@ -16,7 +16,7 @@ use ucan::Ucan;
 pub struct AuthorKeyMaterial(pub AuthorPublicKey, pub Option<Author>);
 
 fn bytes_to_author_key(bytes: Vec<u8>) -> anyhow::Result<Box<dyn KeyMaterial>> {
-    let bytes: [u8; 32] = bytes.try_into().unwrap();
+    let bytes: [u8; 32] = bytes.try_into().map_err(|e| anyhow!("{:#?}", e))?;
     Ok(Box::new(AuthorKeyMaterial(
         AuthorPublicKey::from_bytes(&bytes)?,
         None,
