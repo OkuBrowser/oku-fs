@@ -119,7 +119,7 @@ pub struct OkuFs {
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     pub(crate) node: FsNode,
     /// The configuration of the file system.
-    pub(crate) config: OkuFsConfig,
+    pub config: OkuFsConfig,
     /// A watcher for when replicas are created, deleted, or imported.
     pub replica_sender: Sender<()>,
     #[cfg(feature = "fuse")]
@@ -245,7 +245,7 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `restarts` - The current number of attempts at connection; should be zero, as this is used for recursive calls.
-    pub async fn start_relay_connection(&self, restarts: usize) -> miette::Result<()> {
+    pub async fn start_relay_connection(&self, restarts: i64) -> miette::Result<()> {
         if let Some(relay_connection_config) = self.config.relay_connection_config()? {
             let node = self.clone();
             tokio::spawn(async move {

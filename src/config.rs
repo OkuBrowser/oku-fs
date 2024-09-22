@@ -67,10 +67,28 @@ pub struct OkuFsRelayConnectionConfig {
     /// An address to a relay server to perform hole punching.
     relay_address: Arc<Mutex<String>>,
     /// The number of times a node should re-attempt connecting to a relay before giving up.
-    relay_connection_attempts: Arc<Mutex<usize>>,
+    relay_connection_attempts: Arc<Mutex<i64>>,
 }
 
 impl OkuFsRelayConnectionConfig {
+    /// Instantiate the configuration of an Oku file system node's connection to a relay node.
+    ///
+    /// # Arguments
+    ///
+    /// * `relay_address` - An address to a relay server to perform hole punching.
+    ///
+    /// * `relay_connection_attempts` - The number of times a node should re-attempt connecting to a relay before giving up.
+    ///
+    /// # Returns
+    ///
+    /// A configuration of an Oku file system node's connection to a relay node.
+    pub fn new(relay_address: String, relay_connection_attempts: impl Into<i64>) -> Self {
+        Self {
+            relay_address: Arc::new(Mutex::new(relay_address)),
+            relay_connection_attempts: Arc::new(Mutex::new(relay_connection_attempts.into())),
+        }
+    }
+
     /// An address to a relay server to perform hole punching.
     pub fn relay_address(&self) -> miette::Result<String> {
         Ok(self
@@ -94,7 +112,7 @@ impl OkuFsRelayConnectionConfig {
     }
 
     /// The number of times a node should re-attempt connecting to a relay before giving up.
-    pub fn relay_connection_attempts(&self) -> miette::Result<usize> {
+    pub fn relay_connection_attempts(&self) -> miette::Result<i64> {
         Ok(self
             .relay_connection_attempts
             .try_lock()
@@ -109,7 +127,7 @@ impl OkuFsRelayConnectionConfig {
     /// * `relay_connection_attempts` - The number of times a node should re-attempt connecting to a relay before giving up.
     pub fn set_relay_connection_attempts(
         &self,
-        relay_connection_attempts: impl Into<usize>,
+        relay_connection_attempts: impl Into<i64>,
     ) -> miette::Result<()> {
         *self
             .relay_connection_attempts
