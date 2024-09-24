@@ -116,6 +116,7 @@ pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
 /// The `OkuFs` struct is the primary interface for interacting with an Oku file system.
 #[derive(Clone, Debug)]
 pub struct OkuFs {
+    running_node: Option<FsNode>,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     pub(crate) node: Iroh,
     /// The configuration of the file system.
@@ -147,11 +148,17 @@ impl OkuFs {
     /// A running instance of an Oku file system.
     pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<Self> {
         let node_path = PathBuf::from(FS_PATH).join("node");
-        let node = match iroh::client::Iroh::connect_path(node_path.clone()).await {
-            Ok(node) => node,
+        let (running_node, node) = match iroh::client::Iroh::connect_path(node_path.clone()).await {
+            Ok(node) => (None, node),
             Err(e) => {
                 error!("{}", e);
                 let node = FsNode::persistent(node_path)
+                    .await
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuFsError::CannotStartNode
+                    })?
+                    .enable_rpc()
                     .await
                     .map_err(|e| {
                         error!("{}", e);
@@ -176,7 +183,7 @@ impl OkuFs {
                 discovery_service.add(pkarr);
                 discovery_service.add(dns);
                 discovery_service.publish(&addr_info);
-                node.client().clone()
+                (Some(node.clone()), node.client().clone())
             }
         };
         let authors = node.authors().list().await.map_err(|e| {
@@ -210,6 +217,7 @@ impl OkuFs {
         let (replica_sender, _replica_receiver) = watch::channel(());
 
         let oku_fs = Self {
+            running_node,
             node,
             config,
             replica_sender,
@@ -222,13 +230,15 @@ impl OkuFs {
         };
         let docs_client = oku_fs.node.docs().clone();
         oku_fs.start_relay_connection(0).await?;
-        let oku_fs_clone = oku_fs.clone();
-        tokio::spawn(async move {
-            oku_fs_clone
-                .listen_for_document_ticket_fetch_requests()
-                .await
-                .unwrap()
-        });
+        if oku_fs.running_node.is_some() {
+            let oku_fs_clone = oku_fs.clone();
+            tokio::spawn(async move {
+                oku_fs_clone
+                    .listen_for_document_ticket_fetch_requests()
+                    .await
+                    .unwrap()
+            });
+        }
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
@@ -275,10 +285,16 @@ impl OkuFs {
 
     /// Shuts down the Oku file system.
     pub async fn shutdown(self) -> miette::Result<()> {
-        Ok(self.node.shutdown(false).await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotStopNode
-        })?)
+        match self.running_node {
+            Some(running_node) => Ok(running_node.shutdown().await.map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotStopNode
+            })?),
+            None => Ok(self.node.shutdown(false).await.map_err(|e| {
+                error!("{}", e);
+                OkuFsError::CannotStopNode
+            })?),
+        }
     }
 
     /// Creates a new replica in the file system.
