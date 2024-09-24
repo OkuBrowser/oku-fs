@@ -13,6 +13,7 @@ use fuse_mt::spawn_mount;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::client::docs::Entry;
+use iroh::client::Iroh;
 use iroh::docs::store::FilterKind;
 use iroh::docs::{CapabilityKind, DocTicket};
 use iroh::net::discovery::dns::DnsDiscovery;
@@ -20,7 +21,7 @@ use iroh::net::discovery::pkarr::PkarrPublisher;
 use iroh::{
     base::hash::Hash,
     client::docs::ShareMode,
-    docs::{Author, NamespaceId},
+    docs::NamespaceId,
     net::discovery::{ConcurrentDiscovery, Discovery},
     node::FsNode,
 };
@@ -28,7 +29,6 @@ use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
-use rand_core::OsRng;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -117,7 +117,7 @@ pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
 #[derive(Clone, Debug)]
 pub struct OkuFs {
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
-    pub(crate) node: FsNode,
+    pub(crate) node: Iroh,
     /// The configuration of the file system.
     pub config: OkuFsConfig,
     /// A watcher for when replicas are created, deleted, or imported.
@@ -147,18 +147,38 @@ impl OkuFs {
     /// A running instance of an Oku file system.
     pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<Self> {
         let node_path = PathBuf::from(FS_PATH).join("node");
-        let node = FsNode::persistent(node_path)
-            .await
-            .map_err(|e| {
+        let node = match iroh::client::Iroh::connect_path(node_path.clone()).await {
+            Ok(node) => node,
+            Err(e) => {
                 error!("{}", e);
-                OkuFsError::CannotStartNode
-            })?
-            .spawn()
-            .await
-            .map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotStartNode
-            })?;
+                let node = FsNode::persistent(node_path)
+                    .await
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuFsError::CannotStartNode
+                    })?
+                    .spawn()
+                    .await
+                    .map_err(|e| {
+                        error!("{}", e);
+                        OkuFsError::CannotStartNode
+                    })?;
+                let node_addr = node.net().node_addr().await.map_err(|e| {
+                    error!("{}", e);
+                    OkuFsError::CannotRetrieveNodeAddress
+                })?;
+                let addr_info = node_addr.info;
+                let magic_endpoint = node.endpoint();
+                let secret_key = magic_endpoint.secret_key();
+                let mut discovery_service = ConcurrentDiscovery::empty();
+                let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
+                let dns = DnsDiscovery::n0_dns();
+                discovery_service.add(pkarr);
+                discovery_service.add(dns);
+                discovery_service.publish(&addr_info);
+                node.client().clone()
+            }
+        };
         let authors = node.authors().list().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotRetrieveAuthors
@@ -200,23 +220,8 @@ impl OkuFs {
             #[cfg(feature = "fuse")]
             handle: handle.clone(),
         };
-        let node_addr = oku_fs.node.net().node_addr().await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotRetrieveNodeAddress
-        })?;
-        let addr_info = node_addr.info;
-        let magic_endpoint = oku_fs.node.endpoint();
-        let secret_key = magic_endpoint.secret_key();
-        let mut discovery_service = ConcurrentDiscovery::empty();
-        let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
-        let dns = DnsDiscovery::n0_dns();
-        discovery_service.add(pkarr);
-        discovery_service.add(dns);
-        discovery_service.publish(&addr_info);
-        let docs_client = oku_fs.node.docs();
-        let docs_client = docs_client.clone();
-        let oku_fs_clone = oku_fs.clone();
-        oku_fs_clone.start_relay_connection(0).await?;
+        let docs_client = oku_fs.node.docs().clone();
+        oku_fs.start_relay_connection(0).await?;
         let oku_fs_clone = oku_fs.clone();
         tokio::spawn(async move {
             oku_fs_clone
@@ -268,31 +273,9 @@ impl OkuFs {
         Ok(())
     }
 
-    /// Create a mechanism for discovering other nodes on the network given their IDs.
-    ///
-    /// # Returns
-    ///
-    /// A discovery service for finding other node's addresses given their IDs.
-    pub async fn create_discovery_service(&self) -> miette::Result<ConcurrentDiscovery> {
-        let node_addr = self.node.net().node_addr().await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotRetrieveNodeAddress
-        })?;
-        let addr_info = node_addr.info;
-        let magic_endpoint = self.node.endpoint();
-        let secret_key = magic_endpoint.secret_key();
-        let mut discovery_service = ConcurrentDiscovery::empty();
-        let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
-        let dns = DnsDiscovery::n0_dns();
-        discovery_service.add(pkarr);
-        discovery_service.add(dns);
-        discovery_service.publish(&addr_info);
-        Ok(discovery_service)
-    }
-
     /// Shuts down the Oku file system.
     pub async fn shutdown(self) -> miette::Result<()> {
-        Ok(self.node.shutdown().await.map_err(|e| {
+        Ok(self.node.shutdown(false).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotStopNode
         })?)
@@ -725,7 +708,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Bytes> {
         let entry = self.get_entry(namespace_id, path).await?;
-        Ok(entry.content_bytes(self.node.client()).await.map_err(|e| {
+        Ok(entry.content_bytes(&self.node).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotReadFile
         })?)
@@ -1281,31 +1264,5 @@ impl OkuFs {
         }
         #[allow(unreachable_code)]
         Ok(())
-    }
-}
-
-/// Imports the author credentials of the file system from disk, or creates new credentials if none exist.
-///
-/// # Arguments
-///
-/// * `path` - The path on disk of the file holding the author's credentials.
-///
-/// # Returns
-///
-/// The author credentials.
-pub fn load_or_create_author() -> miette::Result<Author> {
-    let path = PathBuf::from(FS_PATH).join("author");
-    let author_file = std::fs::read(path.clone());
-    match author_file {
-        Ok(bytes) => Ok(Author::from_bytes(
-            &bytes[..32].try_into().into_diagnostic()?,
-        )),
-        Err(_) => {
-            let mut rng = OsRng;
-            let author = Author::new(&mut rng);
-            let author_bytes = author.to_bytes();
-            std::fs::write(path, author_bytes).into_diagnostic()?;
-            Ok(author)
-        }
     }
 }
