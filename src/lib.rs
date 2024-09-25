@@ -16,4 +16,6 @@ pub mod fuse;
 /// Authorisation utilities.
 pub mod ucan;
 
+#[cfg(feature = "fuse")]
+pub use fuser;
 pub use iroh;
