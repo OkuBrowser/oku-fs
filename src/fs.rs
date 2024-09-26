@@ -908,7 +908,7 @@ impl OkuFs {
                 })?
                 .ok_or(OkuFsError::FsEntryNotFound)?;
             Ok(document
-                .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+                .share(share_mode, AddrInfoOptions::RelayAndAddresses)
                 .await
                 .map_err(|e| {
                     error!("{}", e);
