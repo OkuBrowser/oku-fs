@@ -56,7 +56,7 @@ toml = "0.8.19"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"], optional = true}
 tracing = "0.1.40"
 ucan = "0.4.0"
-async-trait = "0.1.83"
+async-trait = "0.1.82"
 bs58 = "0.5.1"
 anyhow = "1.0.89"
 async-recursion = "1.1.1"
