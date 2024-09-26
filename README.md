@@ -2,12 +2,37 @@
 
 A distributed file system for use with the Oku browser.
 
+## Build Instructions
+
+### Prerequisites
+
+To build, please install:
+* A copy of the [Rust toolchain](https://www.rust-lang.org/tools/install)
+    * It is recommended that you install Rust using [`rustup.rs`](https://rustup.rs/), though many Linux distributions also package the Rust toolchain as well.
+* [`libfuse`](https://github.com/libfuse/libfuse/)
+    * This is required if you intend on building with the `fuse` feature, but is otherwise optional.
+    * It is recommended that you obtain this development package from your distribution.
+
+### Commands
+
+After pre-requisites are installed, you may run:
+* `cargo build` for debug builds.
+* `cargo build --release` for release builds.
+* `cargo install --path .` to install.
+* Note: If intending on building or installing an executable rather than a library, please specify the intended features by appending `--features="<features separated by commas>"` to the build command.
+
+### Features
+* `cli` - A command-line interface for performing file system operations.
+* `relay` - A relay server to enable hole punching (see the 'Technical Design' section below).
+* `fuse` - Enables mounting the file system via [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
+* Note: If neither the `cli` or `relay` features are enabled, this software will be installed as a development library.
+
 ## Technical Design
 
 Files and directories are stored in replicas implemented as Iroh documents, allowing them to be shared publicly over the mainline DHT or directly between Oku file system nodes.
 
 An Oku file system node consists of three parts:
-- A running Iroh node.
+- A running [Iroh](https://www.iroh.computer) node.
 - Authorship credentials, consisting of a public and private key pair.
 - Replicas, which are Iroh documents containing the file system data.
     - Replicas have a private key that is used for writing, and a public key that is used for reading and sharing (referred to as a 'namespace ID' or 'document ID').
