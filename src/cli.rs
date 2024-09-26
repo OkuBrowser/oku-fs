@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use iroh::base::ticket::Ticket;
+use iroh::docs::DocTicket;
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
@@ -117,13 +118,22 @@ enum Commands {
         /// The new path of the directory.
         new_path: PathBuf,
     },
-    /// Get a replica from another node.
-    GetReplica {
+    /// Get a replica from other nodes by its ID.
+    GetReplicaById {
         #[arg(short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to get.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
-        /// The optional path of the directory to get within the replica.
+        /// The optional path to get within the replica.
+        path: Option<PathBuf>,
+    },
+    /// Get a replica from other nodes using a ticket.
+    GetReplicaByTicket {
+        #[arg(short, long, value_name = "REPLICA_TICKET")]
+        /// The ID of the replica to get.
+        replica_ticket: DocTicket,
+        #[arg(short, long, value_name = "PATH", default_missing_value = None)]
+        /// The optional path to get within the replica.
         path: Option<PathBuf>,
     },
     /// Mount the filesystem.
@@ -257,11 +267,23 @@ async fn main() -> miette::Result<()> {
                 old_path, old_replica_id, new_path, new_replica_id
             );
         }
-        Some(Commands::GetReplica { replica_id, path }) => {
-            node.fetch_replica(replica_id, path.clone(), true, true)
+        Some(Commands::GetReplicaById { replica_id, path }) => {
+            node.fetch_replica_by_id(replica_id, path.clone(), true, true)
                 .await
                 .map_err(|e| miette!("{}", e))?;
             let files = node.list_files(replica_id, path).await?;
+            println!("Files: {:#?}", files);
+        }
+        Some(Commands::GetReplicaByTicket {
+            replica_ticket,
+            path,
+        }) => {
+            node.fetch_replica_by_ticket(replica_ticket.clone(), path.clone())
+                .await
+                .map_err(|e| miette!("{}", e))?;
+            let files = node
+                .list_files(replica_ticket.capability.id(), path)
+                .await?;
             println!("Files: {:#?}", files);
         }
         #[cfg(feature = "fuse")]

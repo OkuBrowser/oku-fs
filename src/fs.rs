@@ -136,8 +136,8 @@ pub struct OkuFs {
 
 impl OkuFs {
     /// Starts an instance of an Oku file system.
-    /// In the background, an Iroh node is started, and the node's address is periodically announced to the mainline DHT.
-    /// If no author credentials are found on disk, new credentials are generated.
+    /// In the background, an Iroh node is started if none is running, or is connected to if one is already running.
+    /// If not connected to an Oku relay, the node's address is periodically announced to the mainline DHT.
     ///
     /// # Arguments
     ///
@@ -239,18 +239,20 @@ impl OkuFs {
                     .unwrap()
             });
         }
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
-                let replicas = docs_client.list().await.unwrap();
-                pin_mut!(replicas);
-                while let Some(replica) = replicas.next().await {
-                    let (namespace_id, _) = replica.unwrap();
-                    announce_replica(namespace_id).await.unwrap();
+        if oku_fs.config.relay_connection_config()?.is_none() {
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
+                    let replicas = docs_client.list().await.unwrap();
+                    pin_mut!(replicas);
+                    while let Some(replica) = replicas.next().await {
+                        let (namespace_id, _) = replica.unwrap();
+                        announce_replica(namespace_id).await.unwrap();
+                    }
+                    tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
                 }
-                tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
-            }
-        });
+            });
+        }
         Ok(oku_fs.clone())
     }
 
@@ -1092,7 +1094,16 @@ impl OkuFs {
             .resolve_namespace_id(namespace_id.clone(), partial, verified)
             .await
         {
-            Ok(tickets) => Ok(self.fetch_file_with_tickets(tickets, path).await?),
+            Ok(tickets) => match self.fetch_file_with_tickets(tickets, path.clone()).await {
+                Ok(bytes) => Ok(bytes),
+                Err(e) => {
+                    error!("{}", e);
+                    Ok(self
+                        .read_file(namespace_id, path)
+                        .await
+                        .map_err(|e| anyhow!("{}", e))?)
+                }
+            },
             Err(e) => {
                 error!("{}", e);
                 Ok(self
@@ -1161,7 +1172,7 @@ impl OkuFs {
     /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
     ///
     /// * `verified` - Whether to discover peers who have been verified to have the replica.
-    pub async fn fetch_replica(
+    pub async fn fetch_replica_by_id(
         &self,
         namespace_id: NamespaceId,
         path: Option<PathBuf>,
@@ -1199,6 +1210,48 @@ impl OkuFs {
                     } else {
                         docs_client.import(ticket).await?;
                     }
+                }
+            }
+        }
+        replica_sender.send_replace(());
+        Ok(())
+    }
+
+    /// Join a swarm to fetch the latest version of a replica and save it to the local machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `ticket` - A ticket for the replica to fetch.
+    ///
+    /// * `path` - An optional path of requested files within the replica.
+    pub async fn fetch_replica_by_ticket(
+        &self,
+        ticket: DocTicket,
+        path: Option<PathBuf>,
+    ) -> anyhow::Result<()> {
+        let docs_client = self.node.docs();
+        let replica_sender = self.replica_sender.clone();
+        match path.clone() {
+            Some(path) => {
+                let replica = docs_client.import_namespace(ticket.capability).await?;
+                let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+                replica
+                    .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
+                        filter,
+                    ]))
+                    .await?;
+                replica.start_sync(ticket.nodes).await?;
+            }
+            None => {
+                if let Some(replica) = docs_client.open(ticket.capability.id()).await? {
+                    replica
+                        .set_download_policy(iroh::docs::store::DownloadPolicy::EverythingExcept(
+                            vec![],
+                        ))
+                        .await?;
+                    replica.start_sync(ticket.nodes).await?;
+                } else {
+                    docs_client.import(ticket).await?;
                 }
             }
         }
