@@ -13,6 +13,7 @@ use fuse_mt::spawn_mount;
 use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::client::docs::Entry;
+use iroh::client::docs::LiveEvent::SyncFinished;
 use iroh::client::Iroh;
 use iroh::docs::store::FilterKind;
 use iroh::docs::{CapabilityKind, DocTicket};
@@ -109,6 +110,36 @@ pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
     let path = normalise_path(path.clone());
     let path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.into()
+}
+
+/// Merge multiple tickets into one, returning `None` if no tickets were given.
+///
+/// # Arguments
+///
+/// * `tickets` - A vector of tickets to merge.
+///
+/// # Returns
+///
+/// `None` if no tickets were given, or a ticket with a merged capability and merged list of nodes.
+pub fn merge_tickets(tickets: Vec<DocTicket>) -> Option<DocTicket> {
+    let ticket_parts = tickets
+        .iter()
+        .map(|ticket| ticket.capability.clone())
+        .zip(tickets.iter().map(|ticket| ticket.nodes.clone()));
+    ticket_parts
+        .reduce(|mut merged_tickets, next_ticket| {
+            let _ = merged_tickets.0.merge(next_ticket.0);
+            merged_tickets.1.extend_from_slice(&next_ticket.1);
+            merged_tickets
+        })
+        .map(|mut merged_tickets| {
+            merged_tickets.1.sort_unstable();
+            merged_tickets.1.dedup();
+            DocTicket {
+                capability: merged_tickets.0,
+                nodes: merged_tickets.1,
+            }
+        })
 }
 
 /// An instance of an Oku file system.
@@ -1000,7 +1031,7 @@ impl OkuFs {
         }
     }
 
-    /// Use the mainline DHT to obtain tickets for the replica with the given ID.
+    /// Use the mainline DHT to obtain a ticket for the replica with the given ID.
     ///
     /// # Arguments
     ///
@@ -1012,13 +1043,13 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// A list of tickets for the replica with the given ID.
+    /// A ticket for the replica with the given ID.
     pub async fn resolve_namespace_id(
         &self,
         namespace_id: NamespaceId,
         partial: bool,
         verified: bool,
-    ) -> anyhow::Result<Vec<DocTicket>> {
+    ) -> anyhow::Result<DocTicket> {
         let content = ContentRequest::Hash(Hash::new(namespace_id));
         let dht = mainline::Dht::server()?;
         let q = Query {
@@ -1065,7 +1096,11 @@ impl OkuFs {
                 });
             }
         }
-        Ok(tickets.lock_owned().await.to_vec())
+        let tickets = tickets.lock_owned().await.to_vec();
+        merge_tickets(tickets).ok_or(anyhow!(
+            "Could not find tickets for {}",
+            namespace_id.to_string()
+        ))
     }
 
     /// Retrieve a file locally after attempting to retrieve the latest version from the Internet.
@@ -1094,7 +1129,7 @@ impl OkuFs {
             .resolve_namespace_id(namespace_id.clone(), partial, verified)
             .await
         {
-            Ok(tickets) => match self.fetch_file_with_tickets(tickets, path.clone()).await {
+            Ok(ticket) => match self.fetch_file_with_ticket(ticket, path.clone()).await {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
                     error!("{}", e);
@@ -1118,42 +1153,41 @@ impl OkuFs {
     ///
     /// # Arguments
     ///
-    /// * `tickets` - Tickets for the replica containing the file to retrieve.
+    /// * `ticket` - A ticket for the replica containing the file to retrieve.
     ///
     /// * `path` - The path to the file to retrieve.
     ///
     /// # Returns
     ///
     /// The data read from the file.
-    pub async fn fetch_file_with_tickets(
+    pub async fn fetch_file_with_ticket(
         &self,
-        tickets: Vec<DocTicket>,
+        ticket: DocTicket,
         path: PathBuf,
     ) -> anyhow::Result<Bytes> {
         let docs_client = &self.node.docs();
-        let namespace_id = tickets
-            .first()
-            .ok_or(anyhow!("No tickets to fetch {:?} with … ", path))?
-            .capability
-            .id();
-        for ticket in tickets {
-            if ticket.capability.id() != namespace_id {
-                return Err(anyhow!(
-                    "Tickets are for two different replicas ({} is not {}) … ",
-                    ticket.capability.id().to_string(),
-                    namespace_id.to_string()
-                ));
+        let replica = docs_client
+            .import_namespace(ticket.capability.clone())
+            .await?;
+        let filter = FilterKind::Exact(path_to_entry_key(path.clone()));
+        replica
+            .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
+                filter,
+            ]))
+            .await?;
+        replica.start_sync(ticket.nodes).await?;
+        let namespace_id = ticket.capability.id();
+        let mut events = replica.subscribe().await?;
+        let sync_start = std::time::Instant::now();
+        while let Some(event) = events.next().await {
+            if matches!(event?, SyncFinished { .. }) {
+                let elapsed = sync_start.elapsed();
+                info!(
+                    "Synchronisation took {elapsed:?} for {} … ",
+                    namespace_id.to_string(),
+                );
+                break;
             }
-            let replica = docs_client
-                .import_namespace(ticket.capability.clone())
-                .await?;
-            let filter = FilterKind::Exact(path_to_entry_key(path.clone()));
-            replica
-                .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
-                    filter,
-                ]))
-                .await?;
-            replica.start_sync(ticket.nodes).await?;
         }
         Ok(self
             .read_file(namespace_id, path)
@@ -1179,36 +1213,65 @@ impl OkuFs {
         partial: bool,
         verified: bool,
     ) -> anyhow::Result<()> {
-        let tickets = self
-            .resolve_namespace_id(namespace_id, partial, verified)
+        let ticket = self
+            .resolve_namespace_id(namespace_id.clone(), partial, verified)
             .await?;
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
-        for ticket in tickets {
-            if ticket.capability.id() != namespace_id {
-                continue;
+        match path.clone() {
+            Some(path) => {
+                let replica = docs_client.import_namespace(ticket.capability).await?;
+                let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+                replica
+                    .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
+                        filter,
+                    ]))
+                    .await?;
+                replica.start_sync(ticket.nodes).await?;
+                let mut events = replica.subscribe().await?;
+                let sync_start = std::time::Instant::now();
+                while let Some(event) = events.next().await {
+                    if matches!(event?, SyncFinished { .. }) {
+                        let elapsed = sync_start.elapsed();
+                        info!(
+                            "Synchronisation took {elapsed:?} for {} … ",
+                            namespace_id.to_string(),
+                        );
+                        break;
+                    }
+                }
             }
-            match path.clone() {
-                Some(path) => {
-                    let replica = docs_client.import_namespace(ticket.capability).await?;
-                    let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+            None => {
+                if let Some(replica) = docs_client.open(namespace_id.clone()).await.unwrap_or(None)
+                {
                     replica
-                        .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(
-                            vec![filter],
-                        ))
+                        .set_download_policy(iroh::docs::store::DownloadPolicy::default())
                         .await?;
                     replica.start_sync(ticket.nodes).await?;
-                }
-                None => {
-                    if let Some(replica) = docs_client.open(ticket.capability.id()).await? {
-                        replica
-                            .set_download_policy(
-                                iroh::docs::store::DownloadPolicy::EverythingExcept(vec![]),
-                            )
-                            .await?;
-                        replica.start_sync(ticket.nodes).await?;
-                    } else {
-                        docs_client.import(ticket).await?;
+                    let mut events = replica.subscribe().await?;
+                    let sync_start = std::time::Instant::now();
+                    while let Some(event) = events.next().await {
+                        if matches!(event?, SyncFinished { .. }) {
+                            let elapsed = sync_start.elapsed();
+                            info!(
+                                "Synchronisation took {elapsed:?} for {} … ",
+                                namespace_id.to_string(),
+                            );
+                            break;
+                        }
+                    }
+                } else {
+                    let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
+                    let sync_start = std::time::Instant::now();
+                    while let Some(event) = events.next().await {
+                        if matches!(event?, SyncFinished { .. }) {
+                            let elapsed = sync_start.elapsed();
+                            info!(
+                                "Synchronisation took {elapsed:?} for {} … ",
+                                namespace_id.to_string(),
+                            );
+                            break;
+                        }
                     }
                 }
             }
@@ -1229,6 +1292,7 @@ impl OkuFs {
         ticket: DocTicket,
         path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
+        let namespace_id = ticket.capability.id();
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
@@ -1241,17 +1305,51 @@ impl OkuFs {
                     ]))
                     .await?;
                 replica.start_sync(ticket.nodes).await?;
+                let mut events = replica.subscribe().await?;
+                let sync_start = std::time::Instant::now();
+                while let Some(event) = events.next().await {
+                    if matches!(event?, SyncFinished { .. }) {
+                        let elapsed = sync_start.elapsed();
+                        info!(
+                            "Synchronisation took {elapsed:?} for {} … ",
+                            namespace_id.to_string(),
+                        );
+                        break;
+                    }
+                }
             }
             None => {
-                if let Some(replica) = docs_client.open(ticket.capability.id()).await? {
+                if let Some(replica) = docs_client.open(namespace_id.clone()).await.unwrap_or(None)
+                {
                     replica
-                        .set_download_policy(iroh::docs::store::DownloadPolicy::EverythingExcept(
-                            vec![],
-                        ))
+                        .set_download_policy(iroh::docs::store::DownloadPolicy::default())
                         .await?;
                     replica.start_sync(ticket.nodes).await?;
+                    let mut events = replica.subscribe().await?;
+                    let sync_start = std::time::Instant::now();
+                    while let Some(event) = events.next().await {
+                        if matches!(event?, SyncFinished { .. }) {
+                            let elapsed = sync_start.elapsed();
+                            info!(
+                                "Synchronisation took {elapsed:?} for {} … ",
+                                namespace_id.to_string(),
+                            );
+                            break;
+                        }
+                    }
                 } else {
-                    docs_client.import(ticket).await?;
+                    let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
+                    let sync_start = std::time::Instant::now();
+                    while let Some(event) = events.next().await {
+                        if matches!(event?, SyncFinished { .. }) {
+                            let elapsed = sync_start.elapsed();
+                            info!(
+                                "Synchronisation took {elapsed:?} for {} … ",
+                                namespace_id.to_string(),
+                            );
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1276,16 +1374,22 @@ impl OkuFs {
         partial: bool,
         verified: bool,
     ) -> anyhow::Result<()> {
-        let tickets = self
+        let ticket = self
             .resolve_namespace_id(namespace_id, partial, verified)
             .await?;
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
-        for ticket in tickets {
-            if ticket.capability.id() != namespace_id {
-                continue;
+        let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
+        let sync_start = std::time::Instant::now();
+        while let Some(event) = events.next().await {
+            if matches!(event?, SyncFinished { .. }) {
+                let elapsed = sync_start.elapsed();
+                info!(
+                    "Synchronisation took {elapsed:?} for {} … ",
+                    namespace_id.to_string(),
+                );
+                break;
             }
-            docs_client.import(ticket).await?;
         }
         replica_sender.send_replace(());
         Ok(())

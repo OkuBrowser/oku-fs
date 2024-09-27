@@ -130,7 +130,7 @@ enum Commands {
     /// Get a replica from other nodes using a ticket.
     GetReplicaByTicket {
         #[arg(short, long, value_name = "REPLICA_TICKET")]
-        /// The ID of the replica to get.
+        /// A ticket for the replica to get.
         replica_ticket: DocTicket,
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
         /// The optional path to get within the replica.

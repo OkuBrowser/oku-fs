@@ -16,6 +16,8 @@ use fuse_mt::ResultReaddir;
 use fuse_mt::ResultSlice;
 use fuse_mt::ResultStatfs;
 use fuse_mt::ResultWrite;
+#[cfg(target_os = "macos")]
+use fuse_mt::ResultXTimes;
 use fuse_mt::ResultXattr;
 use fuse_mt::Statfs;
 use iroh::client::docs::Entry;
