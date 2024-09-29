@@ -1,6 +1,7 @@
 use ahash::AHashMap;
 use iroh::{docs::NamespaceId, net::NodeAddr};
 use lazy_static::lazy_static;
+use log::error;
 use miette::IntoDiagnostic;
 use oku_fs::{
     discovery::{
@@ -21,7 +22,6 @@ use tokio::{
     net::TcpListener,
     sync::RwLock,
 };
-use tracing::error;
 
 lazy_static! {
     static ref NODES_BY_REPLICA: RwLock<AHashMap<NamespaceId, Vec<SocketAddr>>> =

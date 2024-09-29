@@ -22,6 +22,11 @@ use fuse_mt::ResultXattr;
 use fuse_mt::Statfs;
 use iroh::client::docs::Entry;
 use iroh::docs::NamespaceId;
+use log::debug;
+use log::error;
+use log::info;
+use log::trace;
+use log::warn;
 use miette::IntoDiagnostic;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -34,11 +39,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::trace;
-use tracing::warn;
 
 /// Parse a FUSE path to retrieve the replica and path.
 ///

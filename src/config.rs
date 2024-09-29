@@ -1,4 +1,5 @@
 use crate::fs::FS_PATH;
+use log::error;
 use miette::{miette, IntoDiagnostic};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,8 +24,18 @@ impl OkuFsConfig {
         let path = PathBuf::from(FS_PATH).join("config.toml");
         let config_file_contents = std::fs::read_to_string(path.clone());
         match config_file_contents {
-            Ok(config_file_toml) => Ok(toml::from_str(&config_file_toml).into_diagnostic()?),
-            Err(_) => {
+            Ok(config_file_toml) => match toml::from_str(&config_file_toml) {
+                Ok(config) => Ok(config),
+                Err(e) => {
+                    error!("{}", e);
+                    let config = Self {
+                        relay_connection_config: Arc::new(Mutex::new(None)),
+                    };
+                    Ok(config)
+                }
+            },
+            Err(e) => {
+                error!("{}", e);
                 let config = Self {
                     relay_connection_config: Arc::new(Mutex::new(None)),
                 };

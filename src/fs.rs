@@ -28,12 +28,13 @@ use iroh::{
 };
 use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
 use iroh_mainline_content_discovery::to_infohash;
+use log::{error, info};
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 #[cfg(feature = "fuse")]
 use std::sync::RwLock;
@@ -45,7 +46,6 @@ use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
-use tracing::{error, info};
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
@@ -296,11 +296,13 @@ impl OkuFs {
     pub async fn start_relay_connection(&self, restarts: i64) -> miette::Result<()> {
         if let Some(relay_connection_config) = self.config.relay_connection_config()? {
             let node = self.clone();
+            let relay_address = relay_connection_config.relay_address()?;
+            info!(
+                "Attempting to connect to relay ({}, attempt: {})",
+                relay_address, restarts
+            );
             tokio::spawn(async move {
-                match node
-                    .connect_to_relay(relay_connection_config.relay_address()?)
-                    .await
-                {
+                match node.connect_to_relay(relay_address).await {
                     Ok(_) => Ok::<(), Box<dyn Error + Send + Sync>>(()),
                     Err(e) => {
                         error!("{}", e);
@@ -1402,7 +1404,14 @@ impl OkuFs {
     ///
     /// * `relay_address` - The address of the relay to connect to.
     pub async fn connect_to_relay(&self, relay_address: String) -> miette::Result<()> {
-        let relay_addr = relay_address.parse::<SocketAddr>().into_diagnostic()?;
+        let relay_addr = relay_address
+            .to_socket_addrs()
+            .into_diagnostic()?
+            .next()
+            .ok_or(miette::miette!(
+                "Unable to resolve relay address: {} … ",
+                relay_address
+            ))?;
         let mut stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
         let all_replicas = self.list_replicas().await?;
         let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;

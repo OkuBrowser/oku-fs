@@ -6,10 +6,10 @@ use iroh::{
     docs::{DocTicket, NamespaceId},
 };
 use iroh_mainline_content_discovery::announce_dht;
+use log::error;
 use miette::IntoDiagnostic;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, error::Error, str::FromStr, time::Duration};
-use tracing::error;
 
 /// The delay between republishing content to the mainline DHT.
 pub const REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);

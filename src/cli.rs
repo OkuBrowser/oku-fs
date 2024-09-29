@@ -1,14 +1,15 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use env_logger::Builder;
 use iroh::base::ticket::Ticket;
 use iroh::docs::DocTicket;
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
+use log::{error, info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
-use tracing::{info, Level};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -159,26 +160,20 @@ async fn main() -> miette::Result<()> {
     };
 
     let verbosity_level = match cli.verbosity {
-        0 => Level::ERROR,
-        1 => Level::WARN,
-        2 => Level::INFO,
-        3 => Level::DEBUG,
-        4 => Level::TRACE,
-        _ => Level::TRACE,
+        0 => LevelFilter::Error,
+        1 => LevelFilter::Warn,
+        2 => LevelFilter::Info,
+        3 => LevelFilter::Debug,
+        4 => LevelFilter::Trace,
+        _ => LevelFilter::Trace,
     };
-    let mut subscriber_builder = tracing_subscriber::fmt()
-        .with_env_filter(format!("oku_fs={}", verbosity_level))
-        .pretty()
-        .with_file(false)
-        .with_line_number(false);
+    let mut builder = Builder::new();
+    builder.filter(Some("oku_fs"), verbosity_level);
+    builder.format_module_path(false);
     if cli.verbosity >= 3 {
-        subscriber_builder = subscriber_builder
-            .with_thread_ids(true)
-            .with_thread_names(true)
-            .with_file(true)
-            .with_line_number(true);
+        builder.format_module_path(true);
     }
-    subscriber_builder.init();
+    builder.init();
 
     match cli.command {
         Some(Commands::CreateReplica) => {
