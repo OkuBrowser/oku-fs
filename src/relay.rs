@@ -1,7 +1,11 @@
 use ahash::AHashMap;
-use iroh::{docs::NamespaceId, net::NodeAddr};
+use env_logger::Builder;
+use iroh::{
+    docs::{CapabilityKind, NamespaceId},
+    net::NodeAddr,
+};
 use lazy_static::lazy_static;
-use log::error;
+use log::{error, info, LevelFilter};
 use miette::IntoDiagnostic;
 use oku_fs::{
     discovery::{
@@ -31,6 +35,12 @@ lazy_static! {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> miette::Result<()> {
     miette::set_panic_hook();
+    let mut builder = Builder::new();
+    builder.filter(Some("oku_fs_relay"), LevelFilter::Trace);
+    builder.format_module_path(false);
+    builder.format_module_path(true);
+    builder.init();
+
     // Listen for node connections.
     // 1. A node connects to the relay, creating a new thread.
     // 2. The relay receives a list of replicas held by the node.
@@ -44,7 +54,12 @@ async fn main() -> miette::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
-            for (replica, _node) in NODES_BY_REPLICA.read().await.iter() {
+            for (replica, nodes) in NODES_BY_REPLICA.read().await.iter() {
+                info!(
+                    "Announcing replica {} held by nodes {:?} … ",
+                    replica.to_string(),
+                    nodes
+                );
                 announce_replica(*replica).await?;
             }
             tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
@@ -61,8 +76,9 @@ async fn main() -> miette::Result<()> {
     tokio::spawn(async move {
         let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
         let listener = TcpListener::bind(socket).await?;
+        info!("Listening for content requests on {} … ", socket);
         loop {
-            let (mut stream, _) = listener.accept().await?;
+            let (mut stream, peer) = listener.accept().await?;
             tokio::spawn(async move {
                 let mut buf_reader = BufReader::new(&mut stream);
                 let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();
@@ -76,8 +92,16 @@ async fn main() -> miette::Result<()> {
                         let peer_content_request_str =
                             String::from_utf8_lossy(&peer_content_request_bytes).to_string();
                         let peer_content_request = serde_json::from_str(&peer_content_request_str)?;
+                        info!(
+                            "Peer {} requested content: {:#?} … ",
+                            peer, peer_content_request
+                        );
                         let peer_content_response =
                             respond_to_content_request(peer_content_request).await?;
+                        info!(
+                            "Responding to peer {}: {:#?} … ",
+                            peer, peer_content_response
+                        );
                         let peer_content_response_string =
                             serde_json::to_string(&peer_content_response)?;
                         stream
@@ -165,23 +189,28 @@ async fn respond_to_content_request(
 async fn handle_node_connections() -> miette::Result<()> {
     let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
     let listener = TcpListener::bind(socket).await.into_diagnostic()?;
+    info!("Listening for node connections on {} … ", socket);
     loop {
-        let (mut stream, _) = listener.accept().await.into_diagnostic()?;
-        let node_ip = stream.peer_addr().into_diagnostic()?;
+        let (mut stream, node_ip) = listener.accept().await.into_diagnostic()?;
+        info!("Node {} connecting … ", node_ip);
         tokio::spawn(async move {
             let mut buf_reader = BufReader::new(&mut stream);
             let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();
             buf_reader.consume(received.len());
-            let mut incoming_lines = received.split(|x| *x == 10);
-            if let Some(first_line) = incoming_lines.next() {
+            let mut incoming_lines = received.lines();
+            if let Some(first_line) = incoming_lines.next_line().await? {
                 if first_line == ALPN_INITIAL_RELAY_CONNECTION {
-                    let remaining_lines: Vec<Vec<u8>> =
-                        incoming_lines.map(|x| x.to_owned()).collect();
-                    let replica_list_bytes = remaining_lines.concat();
-                    let replica_list_str = String::from_utf8_lossy(&replica_list_bytes).to_string();
-                    let replica_list: Vec<NamespaceId> = serde_json::from_str(&replica_list_str)?;
+                    let replica_list_str = incoming_lines.next_line().await?.ok_or(
+                        miette::miette!("No replica list provided by node {} … ", node_ip),
+                    )?;
+                    let replica_list: Vec<(NamespaceId, CapabilityKind)> =
+                        serde_json::from_str(&replica_list_str)?;
+                    info!(
+                        "Node {} has connected, has replicas: {:?}",
+                        node_ip, replica_list
+                    );
                     // Add this node to replica-node mappings upon initial connection
-                    for replica in &replica_list {
+                    for (replica, _capability_kind) in &replica_list {
                         let mut nodes_by_replica_writer = NODES_BY_REPLICA.write().await;
                         let nodes_list = nodes_by_replica_writer.get_mut(replica);
                         match nodes_list {

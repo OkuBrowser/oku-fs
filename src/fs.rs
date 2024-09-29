@@ -34,7 +34,7 @@ use path_clean::PathClean;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::net::{Ipv4Addr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 #[cfg(feature = "fuse")]
 use std::sync::RwLock;
@@ -54,7 +54,7 @@ pub const FS_PATH: &str = ".oku";
 pub const ALPN_DOCUMENT_TICKET_FETCH: &[u8] = b"oku/document-ticket/fetch/v0";
 
 /// The protocol identifier for initially connecting to relays.
-pub const ALPN_INITIAL_RELAY_CONNECTION: &[u8] = b"oku/relay/connect/v0";
+pub const ALPN_INITIAL_RELAY_CONNECTION: &str = "oku/relay/connect/v0";
 
 /// The protocol identifier for fetching its list of replicas.
 pub const ALPN_RELAY_FETCH: &[u8] = b"oku/relay/fetch/v0";
@@ -1413,11 +1413,12 @@ impl OkuFs {
                 relay_address
             ))?;
         let mut stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
+        info!("Connected to {} … ", relay_addr);
         let all_replicas = self.list_replicas().await?;
         let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;
         let mut request = Vec::new();
         request
-            .write_all(ALPN_INITIAL_RELAY_CONNECTION)
+            .write_all(ALPN_INITIAL_RELAY_CONNECTION.as_bytes())
             .await
             .into_diagnostic()?;
         request.write_all(b"\n").await.into_diagnostic()?;

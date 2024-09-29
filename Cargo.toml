@@ -65,4 +65,4 @@ async-recursion = "1.1.1"
 default = []
 fuse = ["dep:fuse_mt", "dep:fuser"]
 cli = ["dep:clap", "dep:env_logger"]
-relay = ["dep:ahash", "dep:lazy_static"]
+relay = ["dep:ahash", "dep:lazy_static", "dep:env_logger"]
