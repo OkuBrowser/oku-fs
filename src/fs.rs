@@ -1,5 +1,8 @@
 use crate::config::OkuFsConfig;
-use crate::discovery::{announce_replica, INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
+use crate::discovery::{
+    announce_replica, RelayFetchRequest, ResponseToRelay, ALPN_DOCUMENT_TICKET_FETCH,
+    INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY,
+};
 use crate::discovery::{
     PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
 };
@@ -10,7 +13,7 @@ use async_recursion::async_recursion;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
-use futures::{pin_mut, StreamExt};
+use futures::{pin_mut, SinkExt, StreamExt, TryStreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::client::docs::Entry;
 use iroh::client::docs::LiveEvent::SyncFinished;
@@ -39,25 +42,17 @@ use std::sync::Arc;
 #[cfg(feature = "fuse")]
 use std::sync::RwLock;
 use std::{error::Error, path::PathBuf};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
+use tokio_serde::formats::SymmetricalJson;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
-
-/// The protocol identifier for exchanging document tickets.
-pub const ALPN_DOCUMENT_TICKET_FETCH: &[u8] = b"oku/document-ticket/fetch/v0";
-
-/// The protocol identifier for initially connecting to relays.
-pub const ALPN_INITIAL_RELAY_CONNECTION: &str = "oku/relay/connect/v0";
-
-/// The protocol identifier for fetching its list of replicas.
-pub const ALPN_RELAY_FETCH: &[u8] = b"oku/relay/fetch/v0";
 
 fn normalise_path(path: PathBuf) -> PathBuf {
     PathBuf::from("/").join(path).clean()
@@ -991,6 +986,7 @@ impl OkuFs {
             .await;
         let content_length = file_sizes.iter().sum();
         Ok(PeerContentResponse {
+            alpn: ALPN_DOCUMENT_TICKET_FETCH.to_string(),
             ticket_response: PeerTicketResponse::Document(document_ticket),
             content_size: content_length,
         })
@@ -1002,30 +998,24 @@ impl OkuFs {
         let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
         let listener = TcpListener::bind(socket).await.into_diagnostic()?;
         loop {
-            let (mut stream, _) = listener.accept().await.into_diagnostic()?;
+            let (stream, _) = listener.accept().await.into_diagnostic()?;
+            let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
             let self_clone = self.clone();
             tokio::spawn(async move {
-                let mut buf_reader = BufReader::new(&mut stream);
-                let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();
-                buf_reader.consume(received.len());
-                let mut incoming_lines = received.split(|x| *x == 10);
-                if let Some(first_line) = incoming_lines.next() {
-                    if first_line == ALPN_DOCUMENT_TICKET_FETCH {
-                        let remaining_lines: Vec<Vec<u8>> =
-                            incoming_lines.map(|x| x.to_owned()).collect();
-                        let peer_content_request_bytes = remaining_lines.concat();
-                        let peer_content_request_str =
-                            String::from_utf8_lossy(&peer_content_request_bytes).to_string();
-                        let peer_content_request = serde_json::from_str(&peer_content_request_str)?;
+                let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                    length_delimited,
+                    SymmetricalJson::<PeerContentRequest>::default(),
+                );
+                if let Some(peer_content_request) = deserialized.try_next().await? {
+                    if peer_content_request.alpn == ALPN_DOCUMENT_TICKET_FETCH {
                         let peer_content_response = self_clone
                             .respond_to_content_request(peer_content_request)
                             .await?;
-                        let peer_content_response_string =
-                            serde_json::to_string(&peer_content_response)?;
-                        stream
-                            .write_all(peer_content_response_string.as_bytes())
-                            .await?;
-                        stream.flush().await?;
+                        let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                            deserialized.into_inner(),
+                            SymmetricalJson::<PeerContentResponse>::default(),
+                        );
+                        serialized.send(peer_content_response).await?;
                     }
                 }
                 Ok::<(), Box<dyn Error + Send + Sync>>(())
@@ -1062,30 +1052,33 @@ impl OkuFs {
             },
         };
         let info_hash = to_infohash(q.content);
-        let peer_content_request = PeerContentRequest { namespace_id };
-        let peer_content_request_string = serde_json::to_string(&peer_content_request)?;
+        let peer_content_request = PeerContentRequest {
+            alpn: ALPN_DOCUMENT_TICKET_FETCH.to_string(),
+            namespace_id,
+        };
 
         let mut addrs = dht.get_peers(info_hash)?;
         let tickets: Arc<Mutex<Vec<DocTicket>>> = Arc::new(Mutex::new(Vec::new()));
         for peer_response in &mut addrs {
             for peer in peer_response {
-                let peer_content_request_string = peer_content_request_string.clone();
                 let tickets_clone = tickets.clone();
+                let peer_content_request_clone = peer_content_request.clone();
                 tokio::spawn(async move {
-                    let mut stream = TcpStream::connect(peer).await?;
-                    let mut request = Vec::new();
-                    request.write_all(ALPN_DOCUMENT_TICKET_FETCH).await?;
-                    request.write_all(b"\n").await?;
-                    request
-                        .write_all(peer_content_request_string.as_bytes())
-                        .await?;
-                    request.flush().await?;
-                    stream.write_all(&request).await?;
-                    stream.flush().await?;
-                    let mut response_bytes = Vec::new();
-                    stream.read_to_end(&mut response_bytes).await?;
-                    let response: PeerContentResponse =
-                        serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())?;
+                    let stream = TcpStream::connect(peer).await?;
+                    let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
+                    let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                        length_delimited,
+                        SymmetricalJson::<PeerContentRequest>::default(),
+                    );
+                    serialized.send(peer_content_request_clone).await?;
+                    let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                        serialized.into_inner(),
+                        SymmetricalJson::<PeerContentResponse>::default(),
+                    );
+                    let response = deserialized.try_next().await?.ok_or(miette::miette!(
+                        "Did not receive peer content response from {} … ",
+                        peer
+                    ))?;
                     match response.ticket_response {
                         PeerTicketResponse::Document(document_ticket) => {
                             if document_ticket.capability.id() != namespace_id {
@@ -1412,37 +1405,31 @@ impl OkuFs {
                 "Unable to resolve relay address: {} … ",
                 relay_address
             ))?;
-        let mut stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
-        info!("Connected to {} … ", relay_addr);
-        let all_replicas = self.list_replicas().await?;
-        let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;
-        let mut request = Vec::new();
-        request
-            .write_all(ALPN_INITIAL_RELAY_CONNECTION.as_bytes())
-            .await
-            .into_diagnostic()?;
-        request.write_all(b"\n").await.into_diagnostic()?;
-        request
-            .write_all(all_replicas_str.as_bytes())
-            .await
-            .into_diagnostic()?;
-        request.flush().await.into_diagnostic()?;
-        stream.write_all(&request).await.into_diagnostic()?;
-        stream.flush().await.into_diagnostic()?;
+        let stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
+        info!("Connected to relay {} … ", relay_addr);
+        let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
+        let mut serialized = tokio_serde::SymmetricallyFramed::new(
+            length_delimited,
+            SymmetricalJson::<ResponseToRelay>::default(),
+        );
+        let request = self.response_to_relay().await?;
+        serialized.send(request).await.into_diagnostic()?;
+        let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+            serialized.into_inner(),
+            SymmetricalJson::<RelayFetchRequest>::default(),
+        );
         loop {
-            let mut response_bytes = Vec::new();
-            stream
-                .read_to_end(&mut response_bytes)
-                .await
-                .into_diagnostic()?;
-            if response_bytes == ALPN_RELAY_FETCH {
-                let all_replicas = self.list_replicas().await?;
-                let all_replicas_str = serde_json::to_string(&all_replicas).into_diagnostic()?;
-                stream
-                    .write_all(all_replicas_str.as_bytes())
-                    .await
-                    .into_diagnostic()?;
-                stream.flush().await.into_diagnostic()?;
+            if let Some(_request) = deserialized.try_next().await.into_diagnostic()? {
+                let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                    deserialized.into_inner(),
+                    SymmetricalJson::<ResponseToRelay>::default(),
+                );
+                let request = self.response_to_relay().await?;
+                serialized.send(request).await.into_diagnostic()?;
+                deserialized = tokio_serde::SymmetricallyFramed::new(
+                    serialized.into_inner(),
+                    SymmetricalJson::<RelayFetchRequest>::default(),
+                );
             }
         }
         #[allow(unreachable_code)]

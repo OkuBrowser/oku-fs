@@ -4,7 +4,7 @@ use env_logger::Builder;
 use iroh::base::ticket::Ticket;
 use iroh::docs::DocTicket;
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
-use log::{error, info, LevelFilter};
+use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
 use std::path::PathBuf;

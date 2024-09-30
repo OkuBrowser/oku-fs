@@ -1,9 +1,11 @@
-use crate::error::OkuDiscoveryError;
+use crate::{error::OkuDiscoveryError, fs::OkuFs};
 use futures::StreamExt;
 use iroh::{
-    base::hash::{Hash, HashAndFormat},
-    base::ticket::BlobTicket,
-    docs::{DocTicket, NamespaceId},
+    base::{
+        hash::{Hash, HashAndFormat},
+        ticket::BlobTicket,
+    },
+    docs::{CapabilityKind, DocTicket, NamespaceId},
 };
 use iroh_mainline_content_discovery::announce_dht;
 use log::error;
@@ -22,6 +24,55 @@ pub const DISCOVERY_PORT: u16 = 4938;
 
 /// The number of parallel announcements to make to the mainline DHT.
 pub const ANNOUNCE_PARALLELISM: usize = 10;
+
+/// The protocol identifier for fetching document tickets.
+pub const ALPN_DOCUMENT_TICKET_FETCH: &str = "oku/document-ticket/fetch/v0";
+
+/// The protocol identifier for sending replica information to relays.
+pub const ALPN_RELAY_LIST: &str = "oku/relay/list/v0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The response from a node to a relay.
+pub struct ResponseToRelay {
+    /// The protocol identifier for sending replica information to relays.
+    pub alpn: String,
+    /// The list of replicas held by the node.
+    pub replicas: Vec<(NamespaceId, CapabilityKind)>,
+}
+
+impl OkuFs {
+    /// Generate a response to a relay.
+    ///
+    /// # Returns
+    ///
+    /// The response from a node to a relay.
+    pub async fn response_to_relay(&self) -> miette::Result<ResponseToRelay> {
+        Ok(ResponseToRelay {
+            alpn: ALPN_RELAY_LIST.to_string(),
+            replicas: self.list_replicas().await?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A request from a relay to fetch information from a connected node.
+pub struct RelayFetchRequest {
+    /// The protocol identifier for sending replica information to relays.
+    pub alpn: String,
+}
+
+impl RelayFetchRequest {
+    /// Create a new request from a relay to fetch information from a connected node.
+    ///
+    /// # Returns
+    ///
+    /// A request from a relay to fetch information from a connected node.
+    pub fn new() -> Self {
+        Self {
+            alpn: ALPN_RELAY_LIST.to_string(),
+        }
+    }
+}
 
 /// Announces a local replica to the mainline DHT.
 ///
@@ -107,6 +158,8 @@ pub enum PeerTicketResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 /// A request for content from a peer.
 pub struct PeerContentRequest {
+    /// The protocol identifier for fetching document tickets.
+    pub alpn: String,
     /// The ID of a requested replica.
     pub namespace_id: NamespaceId,
 }
@@ -114,6 +167,8 @@ pub struct PeerContentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A response to a peer requesting content.
 pub struct PeerContentResponse {
+    /// The protocol identifier for requesting document tickets.
+    pub alpn: String,
     /// A ticket satisfying the content request.
     pub ticket_response: PeerTicketResponse,
     /// The size, in bytes, of the requested content.

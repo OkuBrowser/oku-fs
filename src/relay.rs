@@ -1,57 +1,87 @@
 use ahash::AHashMap;
+use clap::Parser;
 use env_logger::Builder;
-use iroh::{
-    docs::{CapabilityKind, NamespaceId},
-    net::NodeAddr,
-};
+use futures::{SinkExt, TryStreamExt};
+use iroh::docs::{CapabilityKind, DocTicket, NamespaceId};
 use lazy_static::lazy_static;
 use log::{error, info, LevelFilter};
 use miette::IntoDiagnostic;
 use oku_fs::{
     discovery::{
-        announce_replica, PeerContentRequest, PeerContentResponse, DISCOVERY_PORT,
+        announce_replica, PeerContentRequest, PeerContentResponse, RelayFetchRequest,
+        ResponseToRelay, ALPN_DOCUMENT_TICKET_FETCH, ALPN_RELAY_LIST, DISCOVERY_PORT,
         INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY,
     },
     error::OkuRelayError,
-    fs::{ALPN_DOCUMENT_TICKET_FETCH, ALPN_INITIAL_RELAY_CONNECTION, ALPN_RELAY_FETCH},
+    fs::merge_tickets,
 };
 use std::{
     error::Error,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
 };
-use tokio::{io::AsyncReadExt, net::TcpStream, sync::Mutex};
+use tokio::{net::TcpListener, sync::RwLock};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::TcpListener,
-    sync::RwLock,
+    net::TcpStream,
+    sync::{Mutex, Notify},
+    task::JoinSet,
 };
+use tokio_serde::formats::SymmetricalJson;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+static INITIAL_CONNECTION_NOTIFY: Notify = Notify::const_new();
 
 lazy_static! {
     static ref NODES_BY_REPLICA: RwLock<AHashMap<NamespaceId, Vec<SocketAddr>>> =
         RwLock::new(AHashMap::new());
 }
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// The level of log output; warnings, information, debugging messages, and trace logs.
+    #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 2)]
+    verbosity: u8,
+    /// The port to receive new node connections on.
+    #[arg(short, long, default_value_t = 4939)]
+    port: u16,
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> miette::Result<()> {
     miette::set_panic_hook();
+    let cli = Cli::parse();
+
+    let verbosity_level = match cli.verbosity {
+        0 => LevelFilter::Error,
+        1 => LevelFilter::Warn,
+        2 => LevelFilter::Info,
+        3 => LevelFilter::Debug,
+        4 => LevelFilter::Trace,
+        _ => LevelFilter::Trace,
+    };
     let mut builder = Builder::new();
-    builder.filter(Some("oku_fs_relay"), LevelFilter::Trace);
+    builder.filter(Some("oku_fs_relay"), verbosity_level);
     builder.format_module_path(false);
-    builder.format_module_path(true);
+    if cli.verbosity >= 3 {
+        builder.format_module_path(true);
+    }
     builder.init();
+
+    let mut spawn_handles = JoinSet::new();
 
     // Listen for node connections.
     // 1. A node connects to the relay, creating a new thread.
     // 2. The relay receives a list of replicas held by the node.
     // 3. The connection stays open, and the relay periodically updates the list of replicas held by the node.
-    tokio::spawn(async move {
-        handle_node_connections().await?;
+    spawn_handles.spawn(async move {
+        handle_node_connections(cli.port).await?;
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     });
 
     // Announce replicas held by connected nodes.
-    tokio::spawn(async move {
+    spawn_handles.spawn(async move {
+        INITIAL_CONNECTION_NOTIFY.notified().await;
         loop {
             tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
             for (replica, nodes) in NODES_BY_REPLICA.read().await.iter() {
@@ -73,41 +103,31 @@ async fn main() -> miette::Result<()> {
     // 2. Find IP of node that can satisfy this request.
     // 3. Pass the request to the node behind NAT and get its response.
     // 4. Pass the response to the external node.
-    tokio::spawn(async move {
+    spawn_handles.spawn(async move {
         let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
         let listener = TcpListener::bind(socket).await?;
         info!("Listening for content requests on {} … ", socket);
         loop {
-            let (mut stream, peer) = listener.accept().await?;
+            let (stream, peer) = listener.accept().await?;
             tokio::spawn(async move {
-                let mut buf_reader = BufReader::new(&mut stream);
-                let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();
-                buf_reader.consume(received.len());
-                let mut incoming_lines = received.split(|x| *x == 10);
-                if let Some(first_line) = incoming_lines.next() {
-                    if first_line == ALPN_DOCUMENT_TICKET_FETCH {
-                        let remaining_lines: Vec<Vec<u8>> =
-                            incoming_lines.map(|x| x.to_owned()).collect();
-                        let peer_content_request_bytes = remaining_lines.concat();
-                        let peer_content_request_str =
-                            String::from_utf8_lossy(&peer_content_request_bytes).to_string();
-                        let peer_content_request = serde_json::from_str(&peer_content_request_str)?;
-                        info!(
-                            "Peer {} requested content: {:#?} … ",
-                            peer, peer_content_request
-                        );
+                let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
+                let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                    length_delimited,
+                    SymmetricalJson::<PeerContentRequest>::default(),
+                );
+                if let Some(peer_content_request) = deserialized.try_next().await? {
+                    if peer_content_request.alpn == ALPN_DOCUMENT_TICKET_FETCH {
                         let peer_content_response =
                             respond_to_content_request(peer_content_request).await?;
                         info!(
                             "Responding to peer {}: {:#?} … ",
                             peer, peer_content_response
                         );
-                        let peer_content_response_string =
-                            serde_json::to_string(&peer_content_response)?;
-                        stream
-                            .write_all(peer_content_response_string.as_bytes())
-                            .await?;
-                        stream.flush().await?;
+                        let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                            deserialized.into_inner(),
+                            SymmetricalJson::<PeerContentResponse>::default(),
+                        );
+                        serialized.send(peer_content_response).await?;
                     }
                 }
                 Ok::<(), Box<dyn Error + Send + Sync>>(())
@@ -116,7 +136,10 @@ async fn main() -> miette::Result<()> {
         #[allow(unreachable_code)]
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     });
+
     tokio::signal::ctrl_c().await.into_diagnostic()?;
+    spawn_handles.shutdown().await;
+
     Ok(())
 }
 
@@ -129,41 +152,44 @@ async fn respond_to_content_request(
         .ok_or(OkuRelayError::CannotSatisfyRequest(
             peer_content_request.namespace_id.to_string(),
         ))?;
-    let peer_content_request_string =
-        serde_json::to_string(&peer_content_request).into_diagnostic()?;
-    let ticket_addresses: Arc<Mutex<Vec<NodeAddr>>> = Arc::new(Mutex::new(Vec::new()));
+    info!(
+        "Available nodes for {}: {:?}",
+        peer_content_request.namespace_id.to_string(),
+        nodes
+    );
+    let tickets: Arc<Mutex<Vec<DocTicket>>> = Arc::new(Mutex::new(Vec::new()));
     let content_sizes = Arc::new(Mutex::new(Vec::new()));
+    let mut ticket_request_handles = JoinSet::new();
     for node in nodes.to_vec() {
-        let ticket_addresses = ticket_addresses.clone();
+        let tickets = tickets.clone();
         let content_sizes = content_sizes.clone();
-        let peer_content_request_string = peer_content_request_string.clone();
-        tokio::spawn(async move {
-            let mut stream = TcpStream::connect(node).await.into_diagnostic()?;
-            let mut request = Vec::new();
-            request
-                .write_all(ALPN_DOCUMENT_TICKET_FETCH)
-                .await
-                .into_diagnostic()?;
-            request.write_all(b"\n").await.into_diagnostic()?;
-            request
-                .write_all(peer_content_request_string.as_bytes())
-                .await
-                .into_diagnostic()?;
-            request.flush().await.into_diagnostic()?;
-            stream.write_all(&request).await.into_diagnostic()?;
-            stream.flush().await.into_diagnostic()?;
-            let mut response_bytes = Vec::new();
-            stream
-                .read_to_end(&mut response_bytes)
-                .await
-                .into_diagnostic()?;
-            let response: PeerContentResponse =
-                serde_json::from_str(String::from_utf8_lossy(&response_bytes).as_ref())
-                    .into_diagnostic()?;
+        let peer_content_request = peer_content_request.clone();
+        ticket_request_handles.spawn(async move {
+            info!(
+                "Requesting ticket for {} from {} … ",
+                peer_content_request.namespace_id.to_string(),
+                node
+            );
+            let stream = TcpStream::connect(node).await.into_diagnostic()?;
+            let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
+            let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                length_delimited,
+                SymmetricalJson::<PeerContentRequest>::default(),
+            );
+            serialized.send(peer_content_request).await?;
+            let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                serialized.into_inner(),
+                SymmetricalJson::<PeerContentResponse>::default(),
+            );
+            let response = deserialized.try_next().await?.ok_or(miette::miette!(
+                "Did not receive peer content response from {} … ",
+                node
+            ))?;
+            info!("Ticket received from {}: {:#?}", node, response);
             match response.ticket_response {
                 oku_fs::discovery::PeerTicketResponse::Document(ticket) => {
-                    match ticket_addresses.try_lock() {
-                        Ok(mut ticket_addresses) => ticket_addresses.extend(ticket.nodes),
+                    match tickets.try_lock() {
+                        Ok(mut tickets) => tickets.push(ticket),
                         Err(e) => error!("{}", e),
                     }
                     match content_sizes.try_lock() {
@@ -175,36 +201,38 @@ async fn respond_to_content_request(
             Ok::<(), Box<dyn Error + Send + Sync>>(())
         });
     }
-    let ticket_addresses = ticket_addresses.lock().await.to_vec();
+    ticket_request_handles.join_all().await;
+    let tickets = tickets.lock().await.to_vec();
     let content_sizes = content_sizes.lock().await.clone();
     Ok(PeerContentResponse {
-        ticket_response: oku_fs::discovery::PeerTicketResponse::Document(iroh::docs::DocTicket {
-            capability: iroh::docs::Capability::Read(peer_content_request.namespace_id),
-            nodes: ticket_addresses,
-        }),
+        alpn: ALPN_DOCUMENT_TICKET_FETCH.to_string(),
+        ticket_response: oku_fs::discovery::PeerTicketResponse::Document(
+            merge_tickets(tickets).ok_or(miette::miette!(
+                "No tickets to merge for {}",
+                peer_content_request.namespace_id.to_string()
+            ))?,
+        ),
         content_size: *content_sizes.iter().max().unwrap_or(&u64::MAX),
     })
 }
 
-async fn handle_node_connections() -> miette::Result<()> {
-    let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
+async fn handle_node_connections(port: u16) -> miette::Result<()> {
+    let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
     let listener = TcpListener::bind(socket).await.into_diagnostic()?;
     info!("Listening for node connections on {} … ", socket);
     loop {
-        let (mut stream, node_ip) = listener.accept().await.into_diagnostic()?;
+        let (stream, node_ip) = listener.accept().await.into_diagnostic()?;
+        let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
         info!("Node {} connecting … ", node_ip);
         tokio::spawn(async move {
-            let mut buf_reader = BufReader::new(&mut stream);
-            let received: Vec<u8> = buf_reader.fill_buf().await?.to_vec();
-            buf_reader.consume(received.len());
-            let mut incoming_lines = received.lines();
-            if let Some(first_line) = incoming_lines.next_line().await? {
-                if first_line == ALPN_INITIAL_RELAY_CONNECTION {
-                    let replica_list_str = incoming_lines.next_line().await?.ok_or(
-                        miette::miette!("No replica list provided by node {} … ", node_ip),
-                    )?;
+            let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                length_delimited,
+                SymmetricalJson::<ResponseToRelay>::default(),
+            );
+            if let Some(response_to_relay) = deserialized.try_next().await? {
+                if response_to_relay.alpn == ALPN_RELAY_LIST {
                     let replica_list: Vec<(NamespaceId, CapabilityKind)> =
-                        serde_json::from_str(&replica_list_str)?;
+                        response_to_relay.replicas;
                     info!(
                         "Node {} has connected, has replicas: {:?}",
                         node_ip, replica_list
@@ -222,7 +250,13 @@ async fn handle_node_connections() -> miette::Result<()> {
                             }
                         }
                     }
+                    INITIAL_CONNECTION_NOTIFY.notify_one();
+                    tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
                     // Periodically update node in mappings while connection remains alive
+                    let mut serialized = tokio_serde::SymmetricallyFramed::new(
+                        deserialized.into_inner(),
+                        SymmetricalJson::<RelayFetchRequest>::default(),
+                    );
                     loop {
                         tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
                         // Remove this node from mappings
@@ -232,15 +266,28 @@ async fn handle_node_connections() -> miette::Result<()> {
                             .values_mut()
                             .for_each(|nodes| nodes.retain(|node| *node != node_ip));
                         // Get updated list from node
-                        stream.write_all(ALPN_RELAY_FETCH).await?;
-                        stream.flush().await?;
-                        let mut response_bytes = Vec::new();
-                        stream.read_to_end(&mut response_bytes).await?;
-                        let response: Vec<NamespaceId> = serde_json::from_str(
-                            String::from_utf8_lossy(&response_bytes).as_ref(),
-                        )?;
+                        serialized.send(RelayFetchRequest::new()).await?;
+                        info!("Requesting new replica list from node {} … ", node_ip);
+                        let mut deserialized = tokio_serde::SymmetricallyFramed::new(
+                            serialized.into_inner(),
+                            SymmetricalJson::<ResponseToRelay>::default(),
+                        );
+                        let response = deserialized
+                            .try_next()
+                            .await?
+                            .ok_or(miette::miette!("No response to relay from {} … ", node_ip))?;
+                        serialized = tokio_serde::SymmetricallyFramed::new(
+                            deserialized.into_inner(),
+                            SymmetricalJson::<RelayFetchRequest>::default(),
+                        );
+                        info!("Response from node {}: {:#?}", node_ip, response);
+                        let replica_list = response.replicas;
+                        info!(
+                            "Refreshing replica list of node {}, has replicas: {:?}",
+                            node_ip, replica_list
+                        );
                         // Re-insert node in mappings
-                        for replica in &response {
+                        for (replica, _capability_kind) in &replica_list {
                             let mut nodes_by_replica_writer = NODES_BY_REPLICA.write().await;
                             let nodes_list = nodes_by_replica_writer.get_mut(replica);
                             match nodes_list {
