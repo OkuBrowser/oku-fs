@@ -2,8 +2,6 @@
 // #![feature(doc_auto_cfg)]
 #![warn(missing_docs)]
 
-/// Configuration of an Oku file system node.
-pub mod config;
 /// Content discovery and retrieval.
 pub mod discovery;
 /// Errors originating in the Oku file system implementation.

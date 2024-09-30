@@ -18,10 +18,6 @@ pub enum OkuFsError {
     #[diagnostic(code(fs::author_cannot_be_created), url(docsrs))]
     /// Author cannot be created.
     AuthorCannotBeCreated,
-    #[error("Author cannot be set as default.")]
-    #[diagnostic(code(fs::author_cannot_be_set_as_default), url(docsrs))]
-    /// Author cannot be set as default.
-    AuthorCannotBeSetAsDefault,
     #[error("Cannot retrieve default author.")]
     #[diagnostic(code(fs::cannot_retrieve_default_author), url(docsrs))]
     /// Cannot retrieve default author.
@@ -91,10 +87,6 @@ pub enum OkuFsError {
 #[derive(Error, Debug, Diagnostic)]
 /// Content discovery errors.
 pub enum OkuDiscoveryError {
-    #[error("Invalid hash and format.")]
-    #[diagnostic(code(discovery::invalid_hash_and_format), url(docsrs))]
-    /// Invalid hash and format.
-    InvalidHashAndFormat,
     #[error("Problem announcing {0} ({1}).")]
     #[diagnostic(code(discovery::problem_announcing_content), url(docsrs))]
     /// Problem announcing content.
@@ -103,19 +95,6 @@ pub enum OkuDiscoveryError {
     #[diagnostic(code(discovery::cannot_generate_sharing_ticket), url(docsrs))]
     /// Cannot generate sharing ticket for replica.
     CannotGenerateSharingTicket,
-    #[error("Cannot generate sharing ticket for file(s).")]
-    #[diagnostic(code(discovery::cannot_generate_sharing_ticket_for_files), url(docsrs))]
-    /// Cannot generate sharing ticket for file(s).
-    CannotGenerateSharingTicketForFiles,
-}
-
-#[derive(Error, Debug, Diagnostic)]
-/// Relay errors.
-pub enum OkuRelayError {
-    #[error("No connected node can satisfy {0}.")]
-    #[diagnostic(code(relay::cannot_satisfy_request), url(docsrs))]
-    /// No connected node can satisfy request.
-    CannotSatisfyRequest(String),
 }
 
 #[derive(Error, Debug, Diagnostic)]

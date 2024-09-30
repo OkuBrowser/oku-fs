@@ -263,7 +263,7 @@ async fn main() -> miette::Result<()> {
             );
         }
         Some(Commands::GetReplicaById { replica_id, path }) => {
-            node.fetch_replica_by_id(replica_id, path.clone(), true, true)
+            node.fetch_replica_by_id(replica_id, path.clone())
                 .await
                 .map_err(|e| miette!("{}", e))?;
             let files = node.list_files(replica_id, path).await?;

@@ -1,20 +1,12 @@
-use crate::config::OkuFsConfig;
-use crate::discovery::{
-    announce_replica, RelayFetchRequest, ResponseToRelay, ALPN_DOCUMENT_TICKET_FETCH,
-    INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY,
-};
-use crate::discovery::{
-    PeerContentRequest, PeerContentResponse, PeerTicketResponse, DISCOVERY_PORT,
-};
-use crate::error::{OkuDiscoveryError, OkuFuseError};
-use crate::{discovery::ContentRequest, error::OkuFsError};
+use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
+use crate::error::{OkuDiscoveryError, OkuFsError, OkuFuseError};
 use anyhow::anyhow;
-use async_recursion::async_recursion;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
-use futures::{pin_mut, SinkExt, StreamExt, TryStreamExt};
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
+use iroh::base::ticket::Ticket;
 use iroh::client::docs::Entry;
 use iroh::client::docs::LiveEvent::SyncFinished;
 use iroh::client::Iroh;
@@ -29,27 +21,20 @@ use iroh::{
     net::discovery::{ConcurrentDiscovery, Discovery},
     node::FsNode,
 };
-use iroh_mainline_content_discovery::protocol::{Query, QueryFlags};
-use iroh_mainline_content_discovery::to_infohash;
 use log::{error, info};
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::net::{Ipv4Addr, SocketAddrV4, ToSocketAddrs};
+#[cfg(feature = "fuse")]
 use std::sync::Arc;
 #[cfg(feature = "fuse")]
 use std::sync::RwLock;
 use std::{error::Error, path::PathBuf};
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use tokio::sync::watch::{self, Sender};
-use tokio::sync::Mutex;
-use tokio_serde::formats::SymmetricalJson;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";
@@ -145,8 +130,6 @@ pub struct OkuFs {
     running_node: Option<FsNode>,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     pub(crate) node: Iroh,
-    /// The configuration of the file system.
-    pub config: OkuFsConfig,
     /// A watcher for when replicas are created, deleted, or imported.
     pub replica_sender: Sender<()>,
     #[cfg(feature = "fuse")]
@@ -163,7 +146,6 @@ pub struct OkuFs {
 impl OkuFs {
     /// Starts an instance of an Oku file system.
     /// In the background, an Iroh node is started if none is running, or is connected to if one is already running.
-    /// If not connected to an Oku relay, the node's address is periodically announced to the mainline DHT.
     ///
     /// # Arguments
     ///
@@ -184,6 +166,7 @@ impl OkuFs {
                         error!("{}", e);
                         OkuFsError::CannotStartNode
                     })?
+                    .enable_docs()
                     .enable_rpc()
                     .await
                     .map_err(|e| {
@@ -238,14 +221,12 @@ impl OkuFs {
             })?
         };
         info!("Default author ID is {} … ", default_author_id.fmt_short());
-        let config = OkuFsConfig::load_or_create_config()?;
 
         let (replica_sender, _replica_receiver) = watch::channel(());
 
         let oku_fs = Self {
             running_node,
             node,
-            config,
             replica_sender,
             #[cfg(feature = "fuse")]
             fs_handles: Arc::new(RwLock::new(HashMap::new())),
@@ -255,62 +236,23 @@ impl OkuFs {
             handle: handle.clone(),
         };
         let docs_client = oku_fs.node.docs().clone();
-        oku_fs.start_relay_connection(0).await?;
-        if oku_fs.running_node.is_some() {
-            let oku_fs_clone = oku_fs.clone();
-            tokio::spawn(async move {
-                oku_fs_clone
-                    .listen_for_document_ticket_fetch_requests()
-                    .await
-                    .unwrap()
-            });
-        }
-        if oku_fs.config.relay_connection_config()?.is_none() {
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
-                    let replicas = docs_client.list().await.unwrap();
-                    pin_mut!(replicas);
-                    while let Some(replica) = replicas.next().await {
-                        let (namespace_id, _) = replica.unwrap();
-                        announce_replica(namespace_id).await.unwrap();
+        let oku_fs_clone = oku_fs.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
+                let replicas = docs_client.list().await?;
+                pin_mut!(replicas);
+                while let Some((replica, capability_kind)) = replicas.try_next().await? {
+                    if matches!(capability_kind, CapabilityKind::Write) {
+                        oku_fs_clone.announce_replica(replica).await?;
                     }
-                    tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
                 }
-            });
-        }
+                tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), Box<dyn Error + Send + Sync>>(())
+        });
         Ok(oku_fs.clone())
-    }
-
-    #[async_recursion]
-    /// Attempts to open a connection to a relay node, re-trying if unable to or if the connection fails at some point.
-    ///
-    /// # Arguments
-    ///
-    /// * `restarts` - The current number of attempts at connection; should be zero, as this is used for recursive calls.
-    pub async fn start_relay_connection(&self, restarts: i64) -> miette::Result<()> {
-        if let Some(relay_connection_config) = self.config.relay_connection_config()? {
-            let node = self.clone();
-            let relay_address = relay_connection_config.relay_address()?;
-            info!(
-                "Attempting to connect to relay ({}, attempt: {})",
-                relay_address, restarts
-            );
-            tokio::spawn(async move {
-                match node.connect_to_relay(relay_address).await {
-                    Ok(_) => Ok::<(), Box<dyn Error + Send + Sync>>(()),
-                    Err(e) => {
-                        error!("{}", e);
-                        if restarts < relay_connection_config.relay_connection_attempts()? {
-                            Ok(node.start_relay_connection(restarts + 1).await?)
-                        } else {
-                            Err(e.into())
-                        }
-                    }
-                }
-            });
-        }
-        Ok(())
     }
 
     /// Shuts down the Oku file system.
@@ -945,93 +887,11 @@ impl OkuFs {
         }
     }
 
-    /// Respond to requests for content from peers.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - A request for content.
-    ///
-    /// # Returns
-    ///
-    /// A response containing a ticket for the content.
-    pub async fn respond_to_content_request(
-        &self,
-        request: PeerContentRequest,
-    ) -> miette::Result<PeerContentResponse> {
-        let docs_client = &self.node.docs();
-        let document = docs_client
-            .open(request.namespace_id)
-            .await
-            .map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotOpenReplica
-            })?
-            .ok_or(OkuFsError::FsEntryNotFound)?;
-        let document_ticket = document
-            .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
-            .await
-            .map_err(|e| {
-                error!("{}", e);
-                OkuDiscoveryError::CannotGenerateSharingTicket
-            })?;
-        let query = iroh::docs::store::Query::single_latest_per_key().build();
-        let entries = document.get_many(query).await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotListFiles
-        })?;
-        pin_mut!(entries);
-        let file_sizes: Vec<u64> = entries
-            .map(|entry| entry.unwrap().content_len())
-            .collect()
-            .await;
-        let content_length = file_sizes.iter().sum();
-        Ok(PeerContentResponse {
-            alpn: ALPN_DOCUMENT_TICKET_FETCH.to_string(),
-            ticket_response: PeerTicketResponse::Document(document_ticket),
-            content_size: content_length,
-        })
-    }
-
-    /// Handles incoming requests for document tickets.
-    /// This function listens for incoming connections from peers and responds to requests for document tickets.
-    pub async fn listen_for_document_ticket_fetch_requests(&self) -> miette::Result<()> {
-        let socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
-        let listener = TcpListener::bind(socket).await.into_diagnostic()?;
-        loop {
-            let (stream, _) = listener.accept().await.into_diagnostic()?;
-            let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
-            let self_clone = self.clone();
-            tokio::spawn(async move {
-                let mut deserialized = tokio_serde::SymmetricallyFramed::new(
-                    length_delimited,
-                    SymmetricalJson::<PeerContentRequest>::default(),
-                );
-                if let Some(peer_content_request) = deserialized.try_next().await? {
-                    if peer_content_request.alpn == ALPN_DOCUMENT_TICKET_FETCH {
-                        let peer_content_response = self_clone
-                            .respond_to_content_request(peer_content_request)
-                            .await?;
-                        let mut serialized = tokio_serde::SymmetricallyFramed::new(
-                            deserialized.into_inner(),
-                            SymmetricalJson::<PeerContentResponse>::default(),
-                        );
-                        serialized.send(peer_content_response).await?;
-                    }
-                }
-                Ok::<(), Box<dyn Error + Send + Sync>>(())
-            });
-        }
-    }
-
     /// Use the mainline DHT to obtain a ticket for the replica with the given ID.
     ///
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to fetch.
-    ///
-    /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
-    ///
-    /// * `verified` - Whether to discover peers who have been verified to have the replica.
     ///
     /// # Returns
     ///
@@ -1039,59 +899,14 @@ impl OkuFs {
     pub async fn resolve_namespace_id(
         &self,
         namespace_id: NamespaceId,
-        partial: bool,
-        verified: bool,
     ) -> anyhow::Result<DocTicket> {
-        let content = ContentRequest::Hash(Hash::new(namespace_id));
-        let dht = mainline::Dht::server()?;
-        let q = Query {
-            content: content.hash_and_format(),
-            flags: QueryFlags {
-                complete: !partial,
-                verified,
-            },
-        };
-        let info_hash = to_infohash(q.content);
-        let peer_content_request = PeerContentRequest {
-            alpn: ALPN_DOCUMENT_TICKET_FETCH.to_string(),
-            namespace_id,
-        };
-
-        let mut addrs = dht.get_peers(info_hash)?;
-        let tickets: Arc<Mutex<Vec<DocTicket>>> = Arc::new(Mutex::new(Vec::new()));
-        for peer_response in &mut addrs {
-            for peer in peer_response {
-                let tickets_clone = tickets.clone();
-                let peer_content_request_clone = peer_content_request.clone();
-                tokio::spawn(async move {
-                    let stream = TcpStream::connect(peer).await?;
-                    let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
-                    let mut serialized = tokio_serde::SymmetricallyFramed::new(
-                        length_delimited,
-                        SymmetricalJson::<PeerContentRequest>::default(),
-                    );
-                    serialized.send(peer_content_request_clone).await?;
-                    let mut deserialized = tokio_serde::SymmetricallyFramed::new(
-                        serialized.into_inner(),
-                        SymmetricalJson::<PeerContentResponse>::default(),
-                    );
-                    let response = deserialized.try_next().await?.ok_or(miette::miette!(
-                        "Did not receive peer content response from {} … ",
-                        peer
-                    ))?;
-                    match response.ticket_response {
-                        PeerTicketResponse::Document(document_ticket) => {
-                            if document_ticket.capability.id() != namespace_id {
-                                return Ok::<(), Box<dyn Error + Send + Sync>>(());
-                            }
-                            tickets_clone.lock().await.push(document_ticket);
-                            Ok::<(), Box<dyn Error + Send + Sync>>(())
-                        }
-                    }
-                });
-            }
+        let dht = mainline::Dht::server()?.as_async();
+        let get_stream = dht.get_mutable(namespace_id.as_bytes(), None, None)?;
+        tokio::pin!(get_stream);
+        let mut tickets = Vec::new();
+        while let Some(mutable_item) = get_stream.next().await {
+            tickets.push(DocTicket::from_bytes(mutable_item.value())?)
         }
-        let tickets = tickets.lock_owned().await.to_vec();
         merge_tickets(tickets).ok_or(anyhow!(
             "Could not find tickets for {}",
             namespace_id.to_string()
@@ -1106,10 +921,6 @@ impl OkuFs {
     ///
     /// * `path` - The path to the file to retrieve.
     ///
-    /// * `partial` - If retrieving externally, whether to discover peers who claim to only have a partial copy of the replica.
-    ///
-    /// * `verified` - If retrieving externally, whether to discover peers who have been verified to have the replica.
-    ///
     /// # Returns
     ///
     /// The data read from the file.
@@ -1117,13 +928,8 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
         path: PathBuf,
-        partial: bool,
-        verified: bool,
     ) -> anyhow::Result<Bytes> {
-        match self
-            .resolve_namespace_id(namespace_id.clone(), partial, verified)
-            .await
-        {
+        match self.resolve_namespace_id(namespace_id.clone()).await {
             Ok(ticket) => match self.fetch_file_with_ticket(ticket, path.clone()).await {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
@@ -1197,20 +1003,12 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to fetch.
     ///
     /// * `path` - An optional path of requested files within the replica.
-    ///
-    /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
-    ///
-    /// * `verified` - Whether to discover peers who have been verified to have the replica.
     pub async fn fetch_replica_by_id(
         &self,
         namespace_id: NamespaceId,
         path: Option<PathBuf>,
-        partial: bool,
-        verified: bool,
     ) -> anyhow::Result<()> {
-        let ticket = self
-            .resolve_namespace_id(namespace_id.clone(), partial, verified)
-            .await?;
+        let ticket = self.resolve_namespace_id(namespace_id.clone()).await?;
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
@@ -1359,19 +1157,8 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to fetch.
-    ///
-    /// * `partial` - Whether to discover peers who claim to only have a partial copy of the replica.
-    ///
-    /// * `verified` - Whether to discover peers who have been verified to have the replica.
-    pub async fn sync_replica(
-        &self,
-        namespace_id: NamespaceId,
-        partial: bool,
-        verified: bool,
-    ) -> anyhow::Result<()> {
-        let ticket = self
-            .resolve_namespace_id(namespace_id, partial, verified)
-            .await?;
+    pub async fn sync_replica(&self, namespace_id: NamespaceId) -> anyhow::Result<()> {
+        let ticket = self.resolve_namespace_id(namespace_id).await?;
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
         let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
@@ -1387,52 +1174,6 @@ impl OkuFs {
             }
         }
         replica_sender.send_replace(());
-        Ok(())
-    }
-
-    /// Connects to a relay to facilitate communication behind NAT.
-    /// Upon connecting, the file system will send a list of all replicas to the relay. Periodically, the relay will request the list of replicas again using the same connection.
-    ///
-    /// # Arguments
-    ///
-    /// * `relay_address` - The address of the relay to connect to.
-    pub async fn connect_to_relay(&self, relay_address: String) -> miette::Result<()> {
-        let relay_addr = relay_address
-            .to_socket_addrs()
-            .into_diagnostic()?
-            .next()
-            .ok_or(miette::miette!(
-                "Unable to resolve relay address: {} … ",
-                relay_address
-            ))?;
-        let stream = TcpStream::connect(relay_addr).await.into_diagnostic()?;
-        info!("Connected to relay {} … ", relay_addr);
-        let length_delimited = Framed::new(stream, LengthDelimitedCodec::new());
-        let mut serialized = tokio_serde::SymmetricallyFramed::new(
-            length_delimited,
-            SymmetricalJson::<ResponseToRelay>::default(),
-        );
-        let request = self.response_to_relay().await?;
-        serialized.send(request).await.into_diagnostic()?;
-        let mut deserialized = tokio_serde::SymmetricallyFramed::new(
-            serialized.into_inner(),
-            SymmetricalJson::<RelayFetchRequest>::default(),
-        );
-        loop {
-            if let Some(_request) = deserialized.try_next().await.into_diagnostic()? {
-                let mut serialized = tokio_serde::SymmetricallyFramed::new(
-                    deserialized.into_inner(),
-                    SymmetricalJson::<ResponseToRelay>::default(),
-                );
-                let request = self.response_to_relay().await?;
-                serialized.send(request).await.into_diagnostic()?;
-                deserialized = tokio_serde::SymmetricallyFramed::new(
-                    serialized.into_inner(),
-                    SymmetricalJson::<RelayFetchRequest>::default(),
-                );
-            }
-        }
-        #[allow(unreachable_code)]
         Ok(())
     }
 }
