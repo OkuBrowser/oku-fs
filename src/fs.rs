@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
-use futures::{pin_mut, StreamExt, TryStreamExt};
+use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::Ticket;
 use iroh::client::docs::Entry;
@@ -27,11 +27,11 @@ use path_clean::PathClean;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::path::PathBuf;
 #[cfg(feature = "fuse")]
 use std::sync::Arc;
 #[cfg(feature = "fuse")]
 use std::sync::RwLock;
-use std::{error::Error, path::PathBuf};
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use tokio::sync::watch::{self, Sender};
@@ -235,22 +235,16 @@ impl OkuFs {
             #[cfg(feature = "fuse")]
             handle: handle.clone(),
         };
-        let docs_client = oku_fs.node.docs().clone();
         let oku_fs_clone = oku_fs.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
-                let replicas = docs_client.list().await?;
-                pin_mut!(replicas);
-                while let Some((replica, capability_kind)) = replicas.try_next().await? {
-                    if matches!(capability_kind, CapabilityKind::Write) {
-                        oku_fs_clone.announce_replica(replica).await?;
-                    }
+                match oku_fs_clone.announce_replicas().await {
+                    Ok(_) => info!("Announced all replicas … "),
+                    Err(e) => error!("{}", e),
                 }
                 tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
             }
-            #[allow(unreachable_code)]
-            Ok::<(), Box<dyn Error + Send + Sync>>(())
         });
         Ok(oku_fs.clone())
     }

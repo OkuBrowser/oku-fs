@@ -1,18 +1,19 @@
 use crate::{error::OkuDiscoveryError, fs::OkuFs};
 use iroh::base::ticket::Ticket;
+use iroh::docs::CapabilityKind;
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
 use log::{error, info};
 use miette::IntoDiagnostic;
 use std::{path::PathBuf, time::Duration};
 
-/// The delay between republishing content to the mainline DHT.
+/// The delay between republishing content to the Mainline DHT.
 pub const REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);
 
-/// The initial delay before publishing content to the mainline DHT.
+/// The initial delay before publishing content to the Mainline DHT.
 pub const INITIAL_PUBLISH_DELAY: Duration = Duration::from_millis(500);
 
 impl OkuFs {
-    /// Announces a local replica to the mainline DHT.
+    /// Announces a writeable replica to the Mainline DHT.
     ///
     /// # Arguments
     ///
@@ -29,7 +30,7 @@ impl OkuFs {
             .await? as i64;
         let replica_private_key = mainline::SigningKey::from_bytes(
             &self
-                .create_document_ticket(namespace_id.clone(), ShareMode::Read)
+                .create_document_ticket(namespace_id.clone(), ShareMode::Write)
                 .await?
                 .capability
                 .secret_key()
@@ -47,6 +48,17 @@ impl OkuFs {
                     e.to_string()
                 )
             ),
+        }
+        Ok(())
+    }
+
+    /// Announces all writeable replicas to the Mainline DHT.
+    pub async fn announce_replicas(&self) -> miette::Result<()> {
+        let replicas = self.list_replicas().await?;
+        for (replica, capability_kind) in replicas {
+            if matches!(capability_kind, CapabilityKind::Write) {
+                self.announce_replica(replica).await?;
+            }
         }
         Ok(())
     }
