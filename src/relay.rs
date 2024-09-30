@@ -280,7 +280,6 @@ async fn handle_node_connections(port: u16) -> miette::Result<()> {
                             deserialized.into_inner(),
                             SymmetricalJson::<RelayFetchRequest>::default(),
                         );
-                        info!("Response from node {}: {:#?}", node_ip, response);
                         let replica_list = response.replicas;
                         info!(
                             "Refreshing replica list of node {}, has replicas: {:?}",
