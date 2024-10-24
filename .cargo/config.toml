@@ -1,5 +1,5 @@
-[doc.extern-map.registries]
-crates-io = "https://docs.rs/"
+# [doc.extern-map.registries]
+# crates-io = "https://docs.rs/"
 
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "target-cpu=native", "-C", "strip=symbols"]

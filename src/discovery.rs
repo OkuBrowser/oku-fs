@@ -19,7 +19,6 @@ impl OkuFs {
     ///
     /// * `namespace_id` - The ID of the replica to announce.
     pub async fn announce_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
-        let dht = mainline::Dht::server().into_diagnostic()?.as_async();
         let ticket = mainline::Bytes::from(
             self.create_document_ticket(namespace_id.clone(), ShareMode::Read)
                 .await?
@@ -39,7 +38,7 @@ impl OkuFs {
         );
         let mutable_item =
             mainline::MutableItem::new(replica_private_key, ticket, newest_timestamp, None);
-        match dht.put_mutable(mutable_item).await {
+        match self.dht.put_mutable(mutable_item).await {
             Ok(_) => info!("Announced replica {} … ", namespace_id.to_string()),
             Err(e) => error!(
                 "{}",
@@ -52,13 +51,54 @@ impl OkuFs {
         Ok(())
     }
 
+    /// Announce the home replica
+    pub async fn announce_home_replica(&self) -> miette::Result<NamespaceId> {
+        let home_replica = self
+            .home_replica()
+            .await
+            .ok_or(miette::miette!("No home replica set … "))?;
+        let ticket = mainline::Bytes::from(
+            self.create_document_ticket(home_replica.clone(), ShareMode::Read)
+                .await?
+                .to_bytes(),
+        );
+        let newest_timestamp = self
+            .get_newest_timestamp_in_folder(home_replica, PathBuf::from("/"))
+            .await? as i64;
+        let author_private_key = mainline::SigningKey::from_bytes(
+            &self
+                .get_author()
+                .await
+                .map_err(|e| miette::miette!("{}", e))?
+                .to_bytes(),
+        );
+        let mutable_item =
+            mainline::MutableItem::new(author_private_key, ticket, newest_timestamp, None);
+        match self.dht.put_mutable(mutable_item).await {
+            Ok(_) => info!("Announced home replica {} … ", home_replica.to_string()),
+            Err(e) => error!(
+                "{}",
+                OkuDiscoveryError::ProblemAnnouncingContent(
+                    home_replica.to_string(),
+                    e.to_string()
+                )
+            ),
+        }
+        Ok(home_replica)
+    }
+
     /// Announces all writeable replicas to the Mainline DHT.
     pub async fn announce_replicas(&self) -> miette::Result<()> {
-        let replicas = self.list_replicas().await?;
-        for (replica, capability_kind) in replicas {
-            if matches!(capability_kind, CapabilityKind::Write) {
-                self.announce_replica(replica).await?;
-            }
+        let mut replicas = self.list_replicas().await?;
+        replicas
+            .retain(|(_replica, capability_kind)| matches!(capability_kind, CapabilityKind::Write));
+
+        if let Ok(home_replica) = self.announce_home_replica().await {
+            replicas.retain(|(replica, _capability_kind)| *replica != home_replica);
+        }
+
+        for (replica, _capability_kind) in replicas {
+            self.announce_replica(replica).await?;
         }
         Ok(())
     }

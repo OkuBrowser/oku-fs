@@ -26,18 +26,9 @@ fn bytes_to_author_key(bytes: Vec<u8>) -> anyhow::Result<Box<dyn KeyMaterial>> {
 impl OkuFs {
     /// Retrieve the node's default author keypair for UCAN creation & verification.
     pub async fn get_key_material(&self) -> anyhow::Result<AuthorKeyMaterial> {
-        let default_author_id = self.node.authors().default().await?;
-        let default_author =
-            self.node
-                .authors()
-                .export(default_author_id)
-                .await?
-                .ok_or(anyhow!(
-                    "Missing private key for default author ({}).",
-                    default_author_id.fmt_short()
-                ))?;
+        let default_author = self.get_author().await?;
         Ok(AuthorKeyMaterial(
-            default_author_id.into_public_key()?,
+            default_author.id().into_public_key()?,
             Some(default_author),
         ))
     }

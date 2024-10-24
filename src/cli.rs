@@ -7,6 +7,7 @@ use iroh::{client::docs::ShareMode, docs::NamespaceId};
 use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
@@ -205,9 +206,9 @@ async fn main() -> miette::Result<()> {
             println!(
                 "Replicas: {:#?}",
                 replicas
-                    .iter()
-                    .map(|replica| replica.0.to_string())
-                    .collect::<Vec<String>>()
+                    .par_iter()
+                    .map(|replica| (replica.0.to_string(), replica.1))
+                    .collect::<Vec<_>>()
             );
         }
         Some(Commands::GetFile { replica_id, path }) => {

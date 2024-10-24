@@ -28,6 +28,8 @@ use log::info;
 use log::trace;
 use log::warn;
 use miette::IntoDiagnostic;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -219,8 +221,8 @@ impl OkuFs {
                                         parent_children,
                                     )?;
                                     if parent_immediate_children
-                                        .iter()
-                                        .find(|immediate_child| {
+                                        .par_iter()
+                                        .find_any(|immediate_child| {
                                             immediate_child.name
                                                 == path.file_name().unwrap_or_default()
                                         })

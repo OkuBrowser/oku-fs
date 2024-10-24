@@ -103,3 +103,4 @@ target/
 target-old/
 tree.txt
 test/
+src/*_old.rs
