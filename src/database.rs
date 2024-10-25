@@ -36,16 +36,19 @@ pub(crate) static MODELS: LazyLock<Models> = LazyLock::new(|| {
 pub(crate) static POST_SCHEMA: LazyLock<(Schema, HashMap<&str, Field>)> = LazyLock::new(|| {
     let mut schema_builder = Schema::builder();
     let fields = HashMap::from([
-        ("id", schema_builder.add_bytes_field("id", FAST)),
+        ("id", schema_builder.add_bytes_field("id", STORED)),
         (
             "author_id",
             schema_builder.add_text_field("author_id", TEXT | STORED),
         ),
         ("path", schema_builder.add_text_field("path", TEXT | STORED)),
-        ("url", schema_builder.add_text_field("url", TEXT)),
-        ("title", schema_builder.add_text_field("title", TEXT)),
-        ("body", schema_builder.add_text_field("body", TEXT)),
-        ("tag", schema_builder.add_text_field("tag", TEXT)),
+        ("url", schema_builder.add_text_field("url", TEXT | STORED)),
+        (
+            "title",
+            schema_builder.add_text_field("title", TEXT | STORED),
+        ),
+        ("body", schema_builder.add_text_field("body", TEXT | STORED)),
+        ("tag", schema_builder.add_text_field("tag", TEXT | STORED)),
         (
             "timestamp",
             schema_builder.add_date_field("timestamp", FAST),
@@ -247,8 +250,16 @@ impl OkuDatabase {
         result_limit: Option<usize>,
     ) -> miette::Result<Vec<OkuPost>> {
         let searcher = POST_INDEX_READER.searcher();
-        let query_parser =
-            QueryParser::for_index(&*POST_INDEX, POST_SCHEMA.1.clone().into_values().collect());
+        let query_parser = QueryParser::for_index(
+            &*POST_INDEX,
+            vec![
+                POST_SCHEMA.1["author_id"],
+                POST_SCHEMA.1["path"],
+                POST_SCHEMA.1["title"],
+                POST_SCHEMA.1["body"],
+                POST_SCHEMA.1["tag"],
+            ],
+        );
         let query = query_parser.parse_query(&query_string).into_diagnostic()?;
         let limit = result_limit.unwrap_or(10);
         let top_docs = searcher
