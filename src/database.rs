@@ -6,7 +6,7 @@ use native_model::{native_model, Model};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
     sync::{Arc, LazyLock},
@@ -17,13 +17,13 @@ use tantivy::{
     directory::MmapDirectory,
     query::QueryParser,
     schema::{Field, Schema, Value, FAST, STORED, TEXT},
-    u64_to_i64, Directory, Index, IndexReader, IndexWriter, TantivyDocument, Term,
+    Directory, Index, IndexReader, IndexWriter, TantivyDocument, Term,
 };
 use tokio::sync::Mutex;
 use url::Url;
 
 pub(crate) static DATABASE_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| PathBuf::from(FS_PATH).join("database"));
+    LazyLock::new(|| PathBuf::from(FS_PATH).join("OKU_FS_DATABASE"));
 /// An Oku node's database.
 pub static DATABASE: LazyLock<OkuDatabase> = LazyLock::new(|| OkuDatabase::new().unwrap());
 pub(crate) static POST_INDEX_PATH: LazyLock<PathBuf> =
@@ -81,7 +81,7 @@ pub struct OkuUser {
     /// The system time of when this user's content was last retrieved from OkuNet.
     pub last_fetched: SystemTime,
     /// The posts made by this user on OkuNet.
-    pub posts: Option<Vec<Entry>>,
+    pub posts: Vec<Entry>,
     /// The OkuNet identity of the user.
     pub identity: Option<OkuIdentity>,
 }
@@ -99,10 +99,10 @@ pub struct OkuIdentity {
     pub name: String,
     /// The content authors followed by the Oku user.
     /// OkuNet content is retrieved from followed users and the users those users follow.
-    pub following: Vec<AuthorId>,
+    pub following: HashSet<AuthorId>,
     /// The content authors blocked by the Oku user.
     /// Blocked authors are ignored when fetching new OkuNet posts.
-    pub blocked: Vec<AuthorId>,
+    pub blocked: HashSet<AuthorId>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -138,7 +138,7 @@ impl From<OkuPost> for TantivyDocument {
         }
         doc.add_date(
             POST_SCHEMA.1["timestamp"],
-            tantivy::DateTime::from_timestamp_micros(u64_to_i64(value.entry.timestamp())),
+            tantivy::DateTime::from_timestamp_micros(value.entry.timestamp() as i64),
         );
         doc
     }
@@ -194,7 +194,7 @@ impl OkuPost {
             None => OkuUser {
                 author_id: self.entry.author(),
                 last_fetched: SystemTime::now(),
-                posts: Some(vec![self.entry.clone()]),
+                posts: vec![self.entry.clone()],
                 identity: None,
             },
         }
@@ -211,7 +211,7 @@ pub struct OkuNote {
     /// The body of the note.
     pub body: String,
     /// A list of tags associated with the note.
-    pub tags: Vec<String>,
+    pub tags: HashSet<String>,
 }
 
 impl OkuNote {
@@ -459,15 +459,12 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list of all tags that appear in an OkuNet post.
-    pub fn get_tags(&self) -> miette::Result<Vec<String>> {
-        let mut tags: Vec<_> = self
+    pub fn get_tags(&self) -> miette::Result<HashSet<String>> {
+        Ok(self
             .get_posts()?
             .into_iter()
             .flat_map(|x| x.note.tags)
-            .collect();
-        tags.sort_unstable();
-        tags.dedup();
-        Ok(tags)
+            .collect())
     }
 
     /// Retrieves an OkuNet post.

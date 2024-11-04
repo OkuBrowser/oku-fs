@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::SystemTime};
+use std::{collections::HashSet, path::PathBuf, time::SystemTime};
 
 use crate::{
     config::OkuFsConfig,
@@ -160,7 +160,8 @@ impl OkuFs {
         let post_files = self
             .read_directory(self.home_replica().await?, "/posts".into())
             .await
-            .ok()?;
+            .ok()
+            .unwrap_or_default();
         Some(
             post_files
                 .par_iter()
@@ -266,7 +267,8 @@ impl OkuFs {
             posts: self
                 .posts()
                 .await
-                .map(|x| x.into_iter().map(|y| y.entry).collect()),
+                .map(|x| x.into_iter().map(|y| y.entry).collect())
+                .unwrap_or_default(),
             identity: self.identity().await,
         })
     }
@@ -304,7 +306,7 @@ impl OkuFs {
     /// A list of OkuNet posts contained within the user record.
     pub async fn posts_from_user(&self, user: &OkuUser) -> miette::Result<Vec<OkuPost>> {
         let mut posts: Vec<_> = Vec::new();
-        for post in user.posts.clone().unwrap_or_default() {
+        for post in user.posts.clone() {
             posts.push(self.post_from_entry(&post).await?);
         }
         Ok(posts)
@@ -333,7 +335,7 @@ impl OkuFs {
         url: Url,
         title: String,
         body: String,
-        tags: Vec<String>,
+        tags: HashSet<String>,
     ) -> miette::Result<Hash> {
         let home_replica_id = self
             .home_replica()
@@ -615,7 +617,9 @@ impl OkuFs {
         DATABASE.upsert_user(OkuUser {
             author_id: author_id,
             last_fetched: SystemTime::now(),
-            posts: posts.map(|x| x.into_par_iter().map(|y| y.entry).collect()),
+            posts: posts
+                .map(|x| x.into_par_iter().map(|y| y.entry).collect())
+                .unwrap_or_default(),
             identity: profile,
         })?;
         Ok(DATABASE
