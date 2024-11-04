@@ -78,10 +78,10 @@ pub enum OkuFsError {
     #[diagnostic(code(fs::cannot_delete_directory), url(docsrs))]
     /// Cannot delete directory.
     CannotDeleteDirectory,
-    #[error("Cannot share replica as writeable when it is read-only ({0}).")]
-    #[diagnostic(code(fs::cannot_share_replica_writeable), url(docsrs))]
+    #[error("Cannot share replica as writable when it is read-only ({0}).")]
+    #[diagnostic(code(fs::cannot_share_replica_writable), url(docsrs))]
     /// Cannot delete directory.
-    CannotShareReplicaWriteable(NamespaceId),
+    CannotShareReplicaWritable(NamespaceId),
 }
 
 #[derive(Error, Debug, Diagnostic)]

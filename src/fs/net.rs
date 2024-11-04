@@ -11,6 +11,7 @@ use futures::StreamExt;
 use iroh::{
     base::ticket::Ticket,
     blobs::Hash,
+    client::docs::Entry,
     docs::{AuthorId, CapabilityKind, DocTicket, NamespaceId},
 };
 use miette::IntoDiagnostic;
@@ -53,6 +54,165 @@ impl OkuFs {
         config.save()?;
         self.replica_sender.send_replace(());
         Ok(())
+    }
+
+    /// Retrieves the OkuNet posts by the local user, if any.
+    ///
+    /// # Returns
+    ///
+    /// A list of the OkuNet posts by the local user.
+    pub async fn posts(&self) -> Option<Vec<OkuPost>> {
+        let post_files = self
+            .read_directory(self.home_replica().await?, "/posts".into())
+            .await
+            .ok()?;
+        Some(
+            post_files
+                .par_iter()
+                .filter_map(|(entry, bytes)| {
+                    toml::from_str::<OkuNote>(&String::from_utf8_lossy(bytes).to_string())
+                        .ok()
+                        .map(|x| OkuPost {
+                            entry: entry.clone(),
+                            note: x,
+                        })
+                })
+                .collect(),
+        )
+    }
+
+    /// Retrieves an OkuNet post authored by the local user using its path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - A path to a post in the user's home replica.
+    ///
+    /// # Returns
+    ///
+    /// The OkuNet post at the given path.
+    pub async fn post(&self, path: PathBuf) -> miette::Result<OkuPost> {
+        let namespace_id = self
+            .home_replica()
+            .await
+            .ok_or(miette::miette!("Home replica not set … "))?;
+        match self.read_file(namespace_id, path.clone().into()).await {
+            Ok(bytes) => {
+                let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+                    .into_diagnostic()?;
+                Ok(OkuPost {
+                    entry: self.get_entry(namespace_id, path).await?,
+                    note: note,
+                })
+            }
+            Err(e) => Err(miette::miette!("{}", e)),
+        }
+    }
+
+    /// Retrieves the OkuNet identity of the local user.
+    ///
+    /// # Returns
+    ///
+    /// The local user's OkuNet identity, if they have one.
+    pub async fn identity(&self) -> Option<OkuIdentity> {
+        let profile_bytes = self
+            .read_file(self.home_replica().await?, "/profile.toml".into())
+            .await
+            .ok()?;
+        Some(toml::from_str(&String::from_utf8_lossy(&profile_bytes).to_string()).ok()?)
+    }
+
+    /// Replaces the current OkuNet identity of the local user.
+    ///
+    /// # Arguments
+    ///
+    /// * `identity` - The new OkuNet identity.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn set_identity(&self, identity: OkuIdentity) -> miette::Result<Hash> {
+        self.create_or_modify_file(
+            self.home_replica()
+                .await
+                .ok_or(miette::miette!("No home replica set … "))?,
+            "/profile.toml".into(),
+            toml::to_string_pretty(&identity).into_diagnostic()?,
+        )
+        .await
+    }
+
+    /// Replaces the current display name of the local user.
+    ///
+    /// # Arguments
+    ///
+    /// * `display_name` - The new display name.
+    ///
+    /// # Returns
+    ///
+    /// # The hash of the new identity file in the local user's home replica.
+    pub async fn set_display_name(&self, display_name: String) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        identity.name = display_name;
+        self.set_identity(identity).await
+    }
+
+    /// Retrieves an [`OkuUser`] representing the local user.
+    ///
+    /// # Returns
+    ///
+    /// An [`OkuUser`] representing the current user, as if it were retrieved from another Oku user's database.
+    pub async fn user(&self) -> miette::Result<OkuUser> {
+        Ok(OkuUser {
+            author_id: self
+                .default_author()
+                .await
+                .map_err(|e| miette::miette!("{}", e))?,
+            last_fetched: SystemTime::now(),
+            posts: self
+                .posts()
+                .await
+                .map(|x| x.into_iter().map(|y| y.entry).collect()),
+            identity: self.identity().await,
+        })
+    }
+
+    /// Attempts to retrieve an OkuNet post from a file entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - The file entry to parse.
+    ///
+    /// # Returns
+    ///
+    /// An OkuNet post, if the entry represents one.
+    pub async fn post_from_entry(&self, entry: &Entry) -> miette::Result<OkuPost> {
+        let bytes = entry
+            .content_bytes(&self.node)
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+            .into_diagnostic()?;
+        Ok(OkuPost {
+            entry: entry.clone(),
+            note: note,
+        })
+    }
+
+    /// Retrieves OkuNet posts from the file entries in an [`OkuUser`].
+    ///
+    /// # Arguments
+    ///
+    /// * `user` - The OkuNet user record containing the file entries.
+    ///
+    /// # Returns
+    ///
+    /// A list of OkuNet posts contained within the user record.
+    pub async fn posts_from_user(&self, user: &OkuUser) -> miette::Result<Vec<OkuPost>> {
+        let mut posts: Vec<_> = Vec::new();
+        for post in user.posts.clone().unwrap_or_default() {
+            posts.push(self.post_from_entry(&post).await?);
+        }
+        Ok(posts)
     }
 
     /// Create or modify an OkuNet post in the user's home replica.
@@ -119,17 +279,10 @@ impl OkuFs {
         self.delete_file(home_replica_id, path).await
     }
 
-    /// Updates the local database of users; the users one is following, and the users they're following, are recorded locally.
-    /// Blocked users are ignored.
-    pub async fn update_users(&self) -> miette::Result<()> {
-        let this_user = self
-            .get_or_fetch_user(
-                self.default_author()
-                    .await
-                    .map_err(|e| miette::miette!("{}", e))?,
-            )
-            .await?;
-        if let Some(identity) = this_user.identity {
+    /// Refreshes any user data last retrieved longer than [`REPUBLISH_DELAY`](crate::discovery::REPUBLISH_DELAY) ago according to the system time; the users one is following, and the users they're following, are recorded locally.
+    /// Blocked users are not recorded.
+    pub async fn refresh_users(&self) -> miette::Result<()> {
+        if let Some(identity) = self.identity().await {
             for followed_user_id in identity
                 .following
                 .iter()
@@ -143,6 +296,36 @@ impl OkuFs {
                         .filter(|x| !identity.blocked.contains(x))
                     {
                         self.get_or_fetch_user(*followed_followed_user_id).await?;
+                    }
+                }
+            }
+            let blocked_users: Vec<OkuUser> = identity
+                .blocked
+                .par_iter()
+                .filter_map(|x| DATABASE.get_user(*x).ok().flatten())
+                .collect();
+            DATABASE.delete_users_with_posts(blocked_users)?;
+        }
+        Ok(())
+    }
+
+    /// Retrieves user data regardless of when last retrieved; the users one is following, and the users they're following, are recorded locally.
+    /// Blocked users are not recorded.
+    pub async fn fetch_users(&self) -> miette::Result<()> {
+        if let Some(identity) = self.identity().await {
+            for followed_user_id in identity
+                .following
+                .iter()
+                .filter(|x| !identity.blocked.contains(x))
+            {
+                let followed_user = self.fetch_user(*followed_user_id).await?;
+                if let Some(followed_user_identity) = followed_user.identity {
+                    for followed_followed_user_id in followed_user_identity
+                        .following
+                        .iter()
+                        .filter(|x| !identity.blocked.contains(x))
+                    {
+                        self.fetch_user(*followed_followed_user_id).await?;
                     }
                 }
             }
@@ -176,6 +359,61 @@ impl OkuFs {
             "Could not find tickets for {} … ",
             author_id.to_string()
         ))
+    }
+
+    /// Join a swarm to fetch the latest version of an OkuNet post.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The authorship ID of the post's author.
+    ///
+    /// * `path` - The path to the post in the author's home replica.
+    ///
+    /// # Returns
+    ///
+    /// The requested OkuNet post.
+    pub async fn fetch_post(&self, author_id: AuthorId, path: PathBuf) -> miette::Result<OkuPost> {
+        let ticket = self
+            .resolve_author_id(author_id)
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        let namespace_id = ticket.capability.id();
+        match self
+            .fetch_file_with_ticket(ticket, path.clone().into())
+            .await
+        {
+            Ok(bytes) => {
+                let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+                    .into_diagnostic()?;
+                Ok(OkuPost {
+                    entry: self.get_entry(namespace_id, path).await?,
+                    note: note,
+                })
+            }
+            Err(e) => Err(miette::miette!("{}", e)),
+        }
+    }
+
+    /// Retrieves an OkuNet post from the database, or from the mainline DHT if not found locally.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The authorship ID of the post's author.
+    ///
+    /// * `path` - The path to the post in the author's home replica.
+    ///
+    /// # Returns
+    ///
+    /// The requested OkuNet post.
+    pub async fn get_or_fetch_post(
+        &self,
+        author_id: AuthorId,
+        path: PathBuf,
+    ) -> miette::Result<OkuPost> {
+        match DATABASE.get_post(author_id, path.clone()).ok().flatten() {
+            Some(post) => Ok(post),
+            None => self.fetch_post(author_id, path).await,
+        }
     }
 
     /// Join a swarm to fetch the latest version of a home replica and obtain the OkuNet identity within it.
@@ -249,7 +487,7 @@ impl OkuFs {
     ///
     /// An OkuNet user's content.
     pub async fn get_or_fetch_user(&self, author_id: AuthorId) -> miette::Result<OkuUser> {
-        match DATABASE.get_user(author_id)? {
+        match DATABASE.get_user(author_id).ok().flatten() {
             Some(user) => {
                 match SystemTime::now()
                     .duration_since(user.last_fetched)

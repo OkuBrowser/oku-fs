@@ -24,9 +24,10 @@ use url::Url;
 
 pub(crate) static DATABASE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| PathBuf::from(FS_PATH).join("database"));
-pub(crate) static DATABASE: LazyLock<OkuDatabase> = LazyLock::new(|| OkuDatabase::new().unwrap());
+/// An Oku node's database.
+pub static DATABASE: LazyLock<OkuDatabase> = LazyLock::new(|| OkuDatabase::new().unwrap());
 pub(crate) static POST_INDEX_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| PathBuf::from(FS_PATH).join("post_index"));
+    LazyLock::new(|| PathBuf::from(FS_PATH).join("POST_INDEX"));
 pub(crate) static MODELS: LazyLock<Models> = LazyLock::new(|| {
     let mut models = Models::new();
     models.define::<OkuUser>().unwrap();
@@ -68,7 +69,7 @@ pub(crate) static POST_INDEX_READER: LazyLock<IndexReader> =
 pub(crate) static POST_INDEX_WRITER: LazyLock<Arc<Mutex<IndexWriter>>> =
     LazyLock::new(|| Arc::new(Mutex::new(POST_INDEX.writer(50_000_000).unwrap())));
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[native_model(id = 1, version = 1)]
 #[native_db(
     primary_key(author_id -> Vec<u8>)
@@ -91,7 +92,7 @@ impl OkuUser {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 /// An OkuNet identity for an Oku user.
 pub struct OkuIdentity {
     /// The display name of the Oku user.
@@ -184,6 +185,19 @@ impl OkuPost {
         let post_key: [Vec<u8>; 2] = self.primary_key().into();
         let post_key_bytes = post_key.concat();
         Term::from_field_bytes(POST_SCHEMA.1["id"], &post_key_bytes)
+    }
+
+    /// Obtain the author of this post from the OkuNet database.
+    pub fn user(&self) -> OkuUser {
+        match DATABASE.get_user(self.entry.author()).ok().flatten() {
+            Some(user) => user,
+            None => OkuUser {
+                author_id: self.entry.author(),
+                last_fetched: SystemTime::now(),
+                posts: Some(vec![self.entry.clone()]),
+                identity: None,
+            },
+        }
     }
 }
 
@@ -314,6 +328,7 @@ impl OkuDatabase {
     pub fn upsert_posts(&self, posts: Vec<OkuPost>) -> miette::Result<Vec<Option<OkuPost>>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let old_posts: Vec<_> = posts
+            .clone()
             .into_iter()
             .filter_map(|post| rw.upsert(post).ok())
             .collect();
@@ -327,6 +342,9 @@ impl OkuDatabase {
             if let Some(old_post) = old_post {
                 index_writer.delete_term(old_post.index_term());
             }
+        });
+        posts.par_iter().for_each(|post| {
+            let _ = index_writer.add_document(post.clone().into());
         });
         index_writer.commit().into_diagnostic()?;
 
@@ -420,6 +438,39 @@ impl OkuDatabase {
             .into_diagnostic()?
             .collect::<Result<Vec<_>, _>>()
             .into_diagnostic()?)
+    }
+
+    /// Retrieves all known OkuNet posts by a given tag.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - A tag.
+    ///
+    /// # Returns
+    ///
+    /// A list of all known OkuNet posts with the given tag.
+    pub fn get_posts_by_tag(&self, tag: String) -> miette::Result<Vec<OkuPost>> {
+        Ok(self
+            .get_posts()?
+            .into_iter()
+            .filter(|x| x.note.tags.contains(&tag))
+            .collect())
+    }
+
+    /// Retrieves all distinct tags used in OkuNet posts.
+    ///
+    /// # Returns
+    ///
+    /// A list of all tags that appear in an OkuNet post.
+    pub fn get_tags(&self) -> miette::Result<Vec<String>> {
+        let mut tags: Vec<_> = self
+            .get_posts()?
+            .into_iter()
+            .flat_map(|x| x.note.tags)
+            .collect();
+        tags.sort_unstable();
+        tags.dedup();
+        Ok(tags)
     }
 
     /// Retrieves an OkuNet post.

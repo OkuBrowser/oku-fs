@@ -330,7 +330,7 @@ impl OkuFs {
                 CapabilityKind::Read
             )
         {
-            Err(OkuFsError::CannotShareReplicaWriteable(namespace_id).into())
+            Err(OkuFsError::CannotShareReplicaWritable(namespace_id).into())
         } else {
             let docs_client = &self.node.docs();
             let document = docs_client

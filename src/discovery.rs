@@ -13,7 +13,7 @@ pub const REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);
 pub const INITIAL_PUBLISH_DELAY: Duration = Duration::from_millis(500);
 
 impl OkuFs {
-    /// Announces a writeable replica to the Mainline DHT.
+    /// Announces a writable replica to the Mainline DHT.
     ///
     /// # Arguments
     ///
@@ -87,7 +87,7 @@ impl OkuFs {
         Ok(home_replica)
     }
 
-    /// Announces all writeable replicas to the Mainline DHT.
+    /// Announces all writable replicas to the Mainline DHT.
     pub async fn announce_replicas(&self) -> miette::Result<()> {
         let mut replicas = self.list_replicas().await?;
         replicas
