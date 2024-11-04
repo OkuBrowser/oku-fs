@@ -217,15 +217,12 @@ pub struct OkuNote {
 impl OkuNote {
     /// Generate a suggested post path for the note.
     pub fn suggested_post_path(&self) -> String {
-        Self::suggested_post_path_from_url(self.url.clone())
+        Self::suggested_post_path_from_url(self.url.to_string())
     }
 
     /// Generate a suggested post path using a URL.
-    pub fn suggested_post_path_from_url(url: Url) -> String {
-        format!(
-            "/posts/{}.toml",
-            bs58::encode(url.as_str().as_bytes()).into_string()
-        )
+    pub fn suggested_post_path_from_url(url: String) -> String {
+        format!("/posts/{}.toml", bs58::encode(url.as_bytes()).into_string())
     }
 }
 
