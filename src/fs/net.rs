@@ -12,11 +12,20 @@ use iroh::{
     base::ticket::Ticket,
     blobs::Hash,
     client::docs::Entry,
-    docs::{AuthorId, CapabilityKind, DocTicket, NamespaceId},
+    docs::{Author, AuthorId, CapabilityKind, DocTicket, NamespaceId},
 };
 use miette::IntoDiagnostic;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use serde::{Deserialize, Serialize};
 use url::Url;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// An Oku user's credentials, which are sensitive, exported from a node, able to be imported into another.
+pub struct ExportedUser {
+    author: Author,
+    home_replica: Option<NamespaceId>,
+    home_replica_ticket: Option<DocTicket>,
+}
 
 impl OkuFs {
     /// Retrieve the content authorship ID used by the node.
@@ -26,6 +35,92 @@ impl OkuFs {
     /// The content authorship ID used by the node.
     pub async fn default_author(&self) -> anyhow::Result<AuthorId> {
         self.node.authors().default().await
+    }
+
+    /// Exports the local Oku user's credentials.
+    ///
+    /// # Returns
+    ///
+    /// The local Oku user's credentials, containing sensitive information.
+    pub async fn export_user(&self) -> Option<ExportedUser> {
+        let default_author = self.get_author().await.ok();
+        let home_replica = self.home_replica().await;
+        let home_replica_ticket = match home_replica {
+            Some(home_replica_id) => self
+                .create_document_ticket(home_replica_id, iroh::client::docs::ShareMode::Write)
+                .await
+                .ok(),
+            None => None,
+        };
+        default_author.map(|author| ExportedUser {
+            author,
+            home_replica,
+            home_replica_ticket,
+        })
+    }
+
+    /// Imports Oku user credentials that were exported from another node.
+    ///
+    /// # Arguments
+    ///
+    /// * `exported_user` - Oku user credentials, which contain sensitive information.
+    pub async fn import_user(&self, exported_user: ExportedUser) -> miette::Result<()> {
+        self.node
+            .authors()
+            .import(exported_user.author.clone())
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        self.node
+            .authors()
+            .set_default(exported_user.author.id())
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        match (
+            exported_user.home_replica,
+            exported_user.home_replica_ticket,
+        ) {
+            (Some(home_replica), Some(home_replica_ticket)) => match self
+                .fetch_replica_by_ticket(home_replica_ticket, None)
+                .await
+            {
+                Ok(_) => (),
+                Err(_e) => self
+                    .fetch_replica_by_id(home_replica, None)
+                    .await
+                    .map_err(|e| miette::miette!("{}", e))?,
+            },
+            (Some(home_replica), None) => self
+                .fetch_replica_by_id(home_replica, None)
+                .await
+                .map_err(|e| miette::miette!("{}", e))?,
+            _ => (),
+        }
+        self.set_home_replica(exported_user.home_replica)
+    }
+
+    /// Exports the local Oku user's credentials in TOML format.
+    ///
+    /// # Returns
+    ///
+    /// The local Oku user's credentials, containing sensitive information.
+    pub async fn export_user_toml(&self) -> miette::Result<String> {
+        toml::to_string(
+            &self
+                .export_user()
+                .await
+                .ok_or(miette::miette!("No authorship credentials to export … "))?,
+        )
+        .into_diagnostic()
+    }
+
+    /// Imports Oku user credentials that were exported from another node.
+    ///
+    /// # Arguments
+    ///
+    /// * `exported_user` - Oku user credentials, encoded in TOML format. They contain sensitive information.
+    pub async fn import_user_toml(&self, exported_user_toml: String) -> miette::Result<()> {
+        let exported_user: ExportedUser = toml::from_str(&exported_user_toml).into_diagnostic()?;
+        self.import_user(exported_user).await
     }
 
     /// Retrieve the home replica of the Oku user.
