@@ -227,12 +227,22 @@ impl OkuFs {
     ///
     /// The hash of the new identity file in the local user's home replica.
     pub async fn set_identity(&self, identity: OkuIdentity) -> miette::Result<Hash> {
+        // It is not valid to follow or unfollow yourself.
+        let mut validated_identity = identity.clone();
+        let me = self.default_author().await.ok();
+        validated_identity
+            .following
+            .retain(|y| !matches!(me, Some(x) if &x == y));
+        validated_identity
+            .blocked
+            .retain(|y| !matches!(me, Some(x) if &x == y));
+
         self.create_or_modify_file(
             self.home_replica()
                 .await
                 .ok_or(miette::miette!("No home replica set … "))?,
             "/profile.toml".into(),
-            toml::to_string_pretty(&identity).into_diagnostic()?,
+            toml::to_string_pretty(&validated_identity).into_diagnostic()?,
         )
         .await
     }
@@ -250,6 +260,87 @@ impl OkuFs {
         let mut identity = self.identity().await.unwrap_or_default();
         identity.name = display_name;
         self.set_identity(identity).await
+    }
+
+    /// Follow or unfollow a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to follow or unfollow's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn toggle_follow(&self, author_id: AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        match identity.following.contains(&author_id) {
+            true => identity.following.remove(&author_id),
+            false => identity.following.insert(author_id),
+        };
+        self.set_identity(identity).await
+    }
+
+    /// Block or unblock a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to block or unblock's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn toggle_block(&self, author_id: AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        match identity.blocked.contains(&author_id) {
+            true => identity.blocked.remove(&author_id),
+            false => identity.blocked.insert(author_id),
+        };
+        self.set_identity(identity).await
+    }
+
+    /// Check if a user is followed.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// Whether or not the user is followed.
+    pub async fn is_followed(&self, author_id: &AuthorId) -> bool {
+        self.identity()
+            .await
+            .map(|x| x.following.contains(author_id))
+            .unwrap_or(false)
+    }
+
+    /// Check if a user is blocked.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// Whether or not the user is blocked.
+    pub async fn is_blocked(&self, author_id: &AuthorId) -> bool {
+        self.identity()
+            .await
+            .map(|x| x.blocked.contains(author_id))
+            .unwrap_or(false)
+    }
+
+    /// Check whether or not an author ID is the local user's.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - A user's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// Whether or not the user's authorship ID is the local user's.
+    pub async fn is_me(&self, author_id: &AuthorId) -> bool {
+        matches!(self.default_author().await.ok(), Some(x) if &x == author_id)
     }
 
     /// Retrieves an [`OkuUser`] representing the local user.
