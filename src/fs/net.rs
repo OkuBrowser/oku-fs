@@ -80,7 +80,7 @@ impl OkuFs {
             exported_user.home_replica_ticket,
         ) {
             (Some(home_replica), Some(home_replica_ticket)) => match self
-                .fetch_replica_by_ticket(home_replica_ticket, None)
+                .fetch_replica_by_ticket(&home_replica_ticket, None)
                 .await
             {
                 Ok(_) => (),
@@ -267,7 +267,7 @@ impl OkuFs {
             posts: self
                 .posts()
                 .await
-                .map(|x| x.into_iter().map(|y| y.entry).collect())
+                .map(|x| x.into_par_iter().map(|y| y.entry).collect())
                 .unwrap_or_default(),
             identity: self.identity().await,
         })
@@ -476,7 +476,7 @@ impl OkuFs {
             .map_err(|e| miette::miette!("{}", e))?;
         let namespace_id = ticket.capability.id();
         match self
-            .fetch_file_with_ticket(ticket, path.clone().into())
+            .fetch_file_with_ticket(&ticket, path.clone().into())
             .await
         {
             Ok(bytes) => {
@@ -522,11 +522,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// The OkuNet identity within the home replica of the user with the given content authorship ID.
-    pub async fn fetch_profile(&self, author_id: AuthorId) -> miette::Result<OkuIdentity> {
-        let ticket = self
-            .resolve_author_id(author_id)
-            .await
-            .map_err(|e| miette::miette!("{}", e))?;
+    pub async fn fetch_profile(&self, ticket: &DocTicket) -> miette::Result<OkuIdentity> {
         match self
             .fetch_file_with_ticket(ticket, "/profile.toml".into())
             .await
@@ -548,11 +544,7 @@ impl OkuFs {
     /// # Returns
     ///
     /// The OkuNet posts within the home replica of the user with the given content authorship ID.
-    pub async fn fetch_posts(&self, author_id: AuthorId) -> miette::Result<Vec<OkuPost>> {
-        let ticket = self
-            .resolve_author_id(author_id)
-            .await
-            .map_err(|e| miette::miette!("{}", e))?;
+    pub async fn fetch_posts(&self, ticket: &DocTicket) -> miette::Result<Vec<OkuPost>> {
         match self
             .fetch_directory_with_ticket(ticket, "/posts".into())
             .await
@@ -609,8 +601,12 @@ impl OkuFs {
     ///
     /// The latest version of an OkuNet user's content.
     pub async fn fetch_user(&self, author_id: AuthorId) -> miette::Result<OkuUser> {
-        let profile = self.fetch_profile(author_id).await.ok();
-        let posts = self.fetch_posts(author_id).await.ok();
+        let ticket = self
+            .resolve_author_id(author_id)
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        let profile = self.fetch_profile(&ticket).await.ok();
+        let posts = self.fetch_posts(&ticket).await.ok();
         if let Some(posts) = posts.clone() {
             DATABASE.upsert_posts(posts)?;
         }

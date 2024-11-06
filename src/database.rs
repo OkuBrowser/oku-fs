@@ -449,7 +449,7 @@ impl OkuDatabase {
     pub fn get_posts_by_tag(&self, tag: String) -> miette::Result<Vec<OkuPost>> {
         Ok(self
             .get_posts()?
-            .into_iter()
+            .into_par_iter()
             .filter(|x| x.note.tags.contains(&tag))
             .collect())
     }

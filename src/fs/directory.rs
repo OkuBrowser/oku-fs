@@ -224,7 +224,7 @@ impl OkuFs {
     /// The content of the files in the directory.
     pub async fn fetch_directory_with_ticket(
         &self,
-        ticket: DocTicket,
+        ticket: &DocTicket,
         path: PathBuf,
     ) -> anyhow::Result<Vec<(Entry, Bytes)>> {
         let namespace_id = ticket.capability.id();

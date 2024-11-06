@@ -299,7 +299,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> anyhow::Result<Bytes> {
         match self.resolve_namespace_id(namespace_id.clone()).await {
-            Ok(ticket) => match self.fetch_file_with_ticket(ticket, path.clone()).await {
+            Ok(ticket) => match self.fetch_file_with_ticket(&ticket, path.clone()).await {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
                     error!("{}", e);
@@ -332,7 +332,7 @@ impl OkuFs {
     /// The data read from the file.
     pub async fn fetch_file_with_ticket(
         &self,
-        ticket: DocTicket,
+        ticket: &DocTicket,
         path: PathBuf,
     ) -> anyhow::Result<Bytes> {
         let docs_client = &self.node.docs();
@@ -345,7 +345,7 @@ impl OkuFs {
                 filter,
             ]))
             .await?;
-        replica.start_sync(ticket.nodes).await?;
+        replica.start_sync(ticket.nodes.clone()).await?;
         let namespace_id = ticket.capability.id();
         let mut events = replica.subscribe().await?;
         let sync_start = std::time::Instant::now();

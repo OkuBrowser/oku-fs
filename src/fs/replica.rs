@@ -188,7 +188,7 @@ impl OkuFs {
     /// * `path` - An optional path of requested files within the replica.
     pub async fn fetch_replica_by_ticket(
         &self,
-        ticket: DocTicket,
+        ticket: &DocTicket,
         path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
         let namespace_id = ticket.capability.id();
@@ -196,14 +196,16 @@ impl OkuFs {
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
             Some(path) => {
-                let replica = docs_client.import_namespace(ticket.capability).await?;
+                let replica = docs_client
+                    .import_namespace(ticket.capability.clone())
+                    .await?;
                 let filter = FilterKind::Prefix(path_to_entry_prefix(path));
                 replica
                     .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
                         filter,
                     ]))
                     .await?;
-                replica.start_sync(ticket.nodes).await?;
+                replica.start_sync(ticket.nodes.clone()).await?;
                 let mut events = replica.subscribe().await?;
                 let sync_start = std::time::Instant::now();
                 while let Some(event) = events.next().await {
@@ -223,7 +225,7 @@ impl OkuFs {
                     replica
                         .set_download_policy(iroh::docs::store::DownloadPolicy::default())
                         .await?;
-                    replica.start_sync(ticket.nodes).await?;
+                    replica.start_sync(ticket.nodes.clone()).await?;
                     let mut events = replica.subscribe().await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
@@ -237,7 +239,8 @@ impl OkuFs {
                         }
                     }
                 } else {
-                    let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
+                    let (_replica, mut events) =
+                        docs_client.import_and_subscribe(ticket.clone()).await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
                         if matches!(event?, SyncFinished { .. }) {
