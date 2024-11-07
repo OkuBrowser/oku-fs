@@ -236,6 +236,12 @@ impl OkuFs {
         validated_identity
             .blocked
             .retain(|y| !matches!(me, Some(x) if &x == y));
+        // It is not valid to follow blocked people.
+        validated_identity.following = validated_identity
+            .following
+            .difference(&validated_identity.blocked)
+            .map(|x| x.clone())
+            .collect();
 
         self.create_or_modify_file(
             self.home_replica()

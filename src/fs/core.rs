@@ -144,6 +144,10 @@ impl OkuFs {
                     Ok(_) => info!("Announced all replicas … "),
                     Err(e) => error!("{}", e),
                 }
+                match oku_fs_clone.refresh_users().await {
+                    Ok(_) => info!("Refreshed OkuNet database … "),
+                    Err(e) => error!("{}", e),
+                }
                 tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
             }
         });
