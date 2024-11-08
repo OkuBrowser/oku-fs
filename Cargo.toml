@@ -33,18 +33,18 @@ fuse_mt = { version = "0.6.1", optional = true }
 fuser = { version = "0.13.0", optional = true }
 futures = "0.3.31"
 iroh = "0.28.1"
-libc = { version = "0.2.161", optional = true }
+libc = { version = "0.2.162", optional = true }
 mainline = { version = "3.0.0", features = ["async"] }
 miette = { version = "7.2.0", features = ["fancy"] }
 path-clean = "1.0.1"
-thiserror = "1.0.68"
-tokio = "1.41.0"
+thiserror = "2.0.0"
+tokio = "1.41.1"
 env_logger = { version = "0.11.5", optional = true }
 log = "0.4.22"
 ucan = "0.4.0"
 async-trait = "0.1.83"
 bs58 = "0.5.1"
-anyhow = "1.0.92"
+anyhow = "1.0.93"
 native_db = "0.8.1"
 native_model = "0.4.20"
 serde = "1.0.214"
