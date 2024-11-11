@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{future, pin_mut, StreamExt};
 use iroh::client::docs::Entry;
+use iroh::client::Doc;
 use iroh::docs::DocTicket;
 use iroh::{base::hash::Hash, docs::NamespaceId};
 use log::error;
@@ -36,6 +37,36 @@ impl OkuFs {
                 .await
                 .map_err(|e| miette::miette!("{}", e))?;
         Ok(entries.into_par_iter().zip(bytes.into_par_iter()).collect())
+    }
+
+    /// Reads the contents of the files in a directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `document` - A handle to the replica containing the folder.
+    ///
+    /// * `path` - The folder whose contents will be read.
+    ///
+    /// # Returns
+    ///
+    /// A list of file entries and the corresponding content as bytes.
+    pub async fn read_directory_from_replica_handle(
+        &self,
+        document: Doc,
+        path: PathBuf,
+    ) -> miette::Result<Vec<(Entry, Bytes)>> {
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_prefix(path_to_entry_prefix(path))
+            .build();
+        let entries = document
+            .get_many(query)
+            .await
+            .map_err(|e| miette::miette!("{}", e))?;
+        Ok(entries
+            .filter_map(|x| async move { x.ok() })
+            .filter_map(|x| async { x.content_bytes(&document).await.ok().map(|y| (x, y)) })
+            .collect::<Vec<_>>()
+            .await)
     }
 
     /// Moves a directory by copying it to a new location and deleting the original.
@@ -227,11 +258,11 @@ impl OkuFs {
         ticket: &DocTicket,
         path: PathBuf,
     ) -> anyhow::Result<Vec<(Entry, Bytes)>> {
-        let namespace_id = ticket.capability.id();
-        self.fetch_replica_by_ticket(ticket, Some(path.clone()))
+        let replica = self
+            .fetch_replica_by_ticket(ticket, Some(path.clone()))
             .await?;
         Ok(self
-            .read_directory(namespace_id, path)
+            .read_directory_from_replica_handle(replica, path)
             .await
             .map_err(|e| anyhow!("{}", e))?)
     }

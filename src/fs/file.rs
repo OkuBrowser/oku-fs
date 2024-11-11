@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
 use iroh::client::docs::Entry;
 use iroh::client::docs::LiveEvent::SyncFinished;
+use iroh::client::Doc;
 use iroh::docs::store::FilterKind;
 use iroh::docs::DocTicket;
 use iroh::{base::hash::Hash, docs::NamespaceId};
@@ -250,6 +251,37 @@ impl OkuFs {
             error!("{}", e);
             OkuFsError::CannotReadFile
         })?)
+    }
+
+    /// Reads a file.
+    ///
+    /// # Arguments
+    ///
+    /// * `document` - A handle to the replica containing the file to read.
+    ///
+    /// * `path` - The path of the file to read.
+    ///
+    /// # Returns
+    ///
+    /// The data read from the file.
+    pub async fn read_file_from_replica_handle(
+        &self,
+        document: Doc,
+        path: PathBuf,
+    ) -> miette::Result<Bytes> {
+        let file_key = path_to_entry_key(path);
+        let query = iroh::docs::store::Query::single_latest_per_key()
+            .key_exact(file_key)
+            .build();
+        let entry = document
+            .get_one(query)
+            .await
+            .map_err(|e| miette::miette!("{}", e))?
+            .ok_or(OkuFsError::FsEntryNotFound)?;
+        entry
+            .content_bytes(&document)
+            .await
+            .map_err(|e| miette::miette!("{}", e))
     }
 
     /// Moves a file by copying it to a new location and deleting the original.

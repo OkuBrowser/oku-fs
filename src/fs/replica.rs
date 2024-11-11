@@ -6,6 +6,7 @@ use futures::{pin_mut, StreamExt};
 use iroh::base::node_addr::AddrInfoOptions;
 use iroh::base::ticket::Ticket;
 use iroh::client::docs::LiveEvent::SyncFinished;
+use iroh::client::Doc;
 use iroh::docs::store::FilterKind;
 use iroh::docs::{CapabilityKind, DocTicket};
 use iroh::{client::docs::ShareMode, docs::NamespaceId};
@@ -186,15 +187,19 @@ impl OkuFs {
     /// * `ticket` - A ticket for the replica to fetch.
     ///
     /// * `path` - An optional path of requested files within the replica.
+    ///
+    /// # Returns
+    ///
+    /// A handle to the replica.
     pub async fn fetch_replica_by_ticket(
         &self,
         ticket: &DocTicket,
         path: Option<PathBuf>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Doc> {
         let namespace_id = ticket.capability.id();
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
-        match path.clone() {
+        let replica = match path.clone() {
             Some(path) => {
                 let replica = docs_client
                     .import_namespace(ticket.capability.clone())
@@ -218,6 +223,7 @@ impl OkuFs {
                         break;
                     }
                 }
+                replica
             }
             None => {
                 if let Some(replica) = docs_client.open(namespace_id.clone()).await.unwrap_or(None)
@@ -238,8 +244,9 @@ impl OkuFs {
                             break;
                         }
                     }
+                    replica
                 } else {
-                    let (_replica, mut events) =
+                    let (replica, mut events) =
                         docs_client.import_and_subscribe(ticket.clone()).await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
@@ -252,11 +259,12 @@ impl OkuFs {
                             break;
                         }
                     }
+                    replica
                 }
             }
-        }
+        };
         replica_sender.send_replace(());
-        Ok(())
+        Ok(replica)
     }
 
     /// Join a swarm to fetch the latest version of a replica and save it to the local machine.

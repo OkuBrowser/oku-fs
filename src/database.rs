@@ -1,10 +1,12 @@
 use crate::fs::{path_to_entry_key, FS_PATH};
 use iroh::{client::docs::Entry, docs::AuthorId};
+use log::error;
 use miette::IntoDiagnostic;
 use native_db::*;
 use native_model::{native_model, Model};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -69,7 +71,7 @@ pub(crate) static POST_INDEX_READER: LazyLock<IndexReader> =
 pub(crate) static POST_INDEX_WRITER: LazyLock<Arc<Mutex<IndexWriter>>> =
     LazyLock::new(|| Arc::new(Mutex::new(POST_INDEX.writer(50_000_000).unwrap())));
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[native_model(id = 1, version = 1)]
 #[native_db(
     primary_key(author_id -> Vec<u8>)
@@ -84,6 +86,18 @@ pub struct OkuUser {
     pub posts: Vec<Entry>,
     /// The OkuNet identity of the user.
     pub identity: Option<OkuIdentity>,
+}
+
+impl PartialEq for OkuUser {
+    fn eq(&self, other: &Self) -> bool {
+        self.author_id == other.author_id
+    }
+}
+impl Eq for OkuUser {}
+impl Hash for OkuUser {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.author_id.hash(state);
+    }
 }
 
 impl OkuUser {
@@ -427,14 +441,11 @@ impl OkuDatabase {
     ///
     /// A list of all known OkuNet posts by the given author.
     pub fn get_posts_by_author(&self, author_id: AuthorId) -> miette::Result<Vec<OkuPost>> {
-        let r = self.database.r_transaction().into_diagnostic()?;
-        Ok(r.scan()
-            .primary()
-            .into_diagnostic()?
-            .start_with(author_id.as_bytes().to_vec())
-            .into_diagnostic()?
-            .collect::<Result<Vec<_>, _>>()
-            .into_diagnostic()?)
+        Ok(self
+            .get_posts()?
+            .into_par_iter()
+            .filter(|x| x.entry.author() == author_id)
+            .collect())
     }
 
     /// Retrieves all known OkuNet posts by a given tag.
@@ -557,6 +568,58 @@ impl OkuDatabase {
             .flat_map(|x| self.delete_posts(x).ok())
             .collect::<Vec<_>>()
             .concat())
+    }
+
+    /// Deletes OkuNet users by their author IDs and posts by authors with those IDs.
+    ///
+    /// Differs from [`Self::delete_users_with_posts`] as a post will still be deleted even if a record for the authoring user is not found.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_ids` - A list of content authorship IDs.
+    pub fn delete_by_author_ids(&self, author_ids: Vec<AuthorId>) -> miette::Result<()> {
+        let users: Vec<_> = author_ids
+            .par_iter()
+            .filter_map(|x| self.get_user(*x).ok().flatten())
+            .collect();
+        let posts: Vec<_> = author_ids
+            .into_par_iter()
+            .filter_map(|x| self.get_posts_by_author(x).ok())
+            .flatten()
+            .collect();
+        if let Err(e) = self.delete_users(users) {
+            error!("{}", e);
+        }
+        if let Err(e) = self.delete_posts(posts) {
+            error!("{}", e);
+        }
+        Ok(())
+    }
+
+    /// Gets the content authorship IDs of all locally-known users.
+    ///
+    /// This differs from [`Self::get_users`] as IDs of authors with posts but no user records are included.
+    ///
+    /// # Returns
+    ///
+    /// A list of IDs for all users that have content in the local database.
+    pub fn all_local_users(&self) -> Vec<AuthorId> {
+        let user_records: HashSet<_> = self
+            .get_users()
+            .unwrap_or_default()
+            .par_iter()
+            .map(|x| x.author_id)
+            .collect();
+        let post_record_users: HashSet<_> = self
+            .get_posts()
+            .unwrap_or_default()
+            .par_iter()
+            .map(|x| x.entry.author())
+            .collect();
+        user_records
+            .union(&post_record_users)
+            .map(|x| x.to_owned())
+            .collect()
     }
 
     /// Gets the OkuNet content of all known users.

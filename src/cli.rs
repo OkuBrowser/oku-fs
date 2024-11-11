@@ -274,7 +274,7 @@ async fn main() -> miette::Result<()> {
             replica_ticket,
             path,
         }) => {
-            node.fetch_replica_by_ticket(replica_ticket.clone(), path.clone())
+            node.fetch_replica_by_ticket(&replica_ticket.clone(), path.clone())
                 .await
                 .map_err(|e| miette!("{}", e))?;
             let files = node

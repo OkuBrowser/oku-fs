@@ -15,7 +15,9 @@ use iroh::{
     docs::{Author, AuthorId, CapabilityKind, DocTicket, NamespaceId},
 };
 use miette::IntoDiagnostic;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -158,7 +160,7 @@ impl OkuFs {
     /// A list of the OkuNet posts by the local user.
     pub async fn posts(&self) -> Option<Vec<OkuPost>> {
         let post_files = self
-            .read_directory(self.home_replica().await?, "/posts".into())
+            .read_directory(self.home_replica().await?, "/posts/".into())
             .await
             .ok()
             .unwrap_or_default();
@@ -476,60 +478,68 @@ impl OkuFs {
     /// Refreshes any user data last retrieved longer than [`REPUBLISH_DELAY`](crate::discovery::REPUBLISH_DELAY) ago according to the system time; the users one is following, and the users they're following, are recorded locally.
     /// Blocked users are not recorded.
     pub async fn refresh_users(&self) -> miette::Result<()> {
-        if let Some(identity) = self.identity().await {
-            for followed_user_id in identity
-                .following
-                .iter()
-                .filter(|x| !identity.blocked.contains(x))
-            {
-                let followed_user = self.get_or_fetch_user(*followed_user_id).await?;
-                if let Some(followed_user_identity) = followed_user.identity {
-                    for followed_followed_user_id in followed_user_identity
-                        .following
-                        .iter()
-                        .filter(|x| !identity.blocked.contains(x))
-                    {
-                        self.get_or_fetch_user(*followed_followed_user_id).await?;
-                    }
-                }
+        // Wanted users: followed users
+        // Unwanted users: blocked users, unfollowed users
+        let (followed_users, blocked_users) = match self.identity().await {
+            Some(identity) => (identity.following, identity.blocked),
+            None => (HashSet::new(), HashSet::new()),
+        };
+        // In case a user is somehow followed and blocked (additional checks should already prevent this)
+        let users_to_add: HashSet<_> = followed_users
+            .difference(&blocked_users)
+            .map(|x| x.to_owned())
+            .collect();
+        let local_users: HashSet<_> = DATABASE.all_local_users().into_par_iter().collect();
+        let users_to_delete: HashSet<_> = local_users
+            .difference(&users_to_add)
+            .map(|x| x.to_owned())
+            .collect();
+
+        for user_id in users_to_add {
+            let user = self.get_or_fetch_user(user_id).await?;
+            let (user_followed_users, user_blocked_users) = match user.identity {
+                Some(identity) => (identity.following, identity.blocked),
+                None => (HashSet::new(), HashSet::new()),
+            };
+            for user_user in user_followed_users.difference(&user_blocked_users) {
+                self.get_or_fetch_user(*user_user).await?;
             }
-            let blocked_users: Vec<OkuUser> = identity
-                .blocked
-                .par_iter()
-                .filter_map(|x| DATABASE.get_user(*x).ok().flatten())
-                .collect();
-            DATABASE.delete_users_with_posts(blocked_users)?;
         }
+        DATABASE.delete_by_author_ids(Vec::from_par_iter(users_to_delete))?;
         Ok(())
     }
 
     /// Retrieves user data regardless of when last retrieved; the users one is following, and the users they're following, are recorded locally.
     /// Blocked users are not recorded.
     pub async fn fetch_users(&self) -> miette::Result<()> {
-        if let Some(identity) = self.identity().await {
-            for followed_user_id in identity
-                .following
-                .iter()
-                .filter(|x| !identity.blocked.contains(x))
-            {
-                let followed_user = self.fetch_user(*followed_user_id).await?;
-                if let Some(followed_user_identity) = followed_user.identity {
-                    for followed_followed_user_id in followed_user_identity
-                        .following
-                        .iter()
-                        .filter(|x| !identity.blocked.contains(x))
-                    {
-                        self.fetch_user(*followed_followed_user_id).await?;
-                    }
-                }
+        // Wanted users: followed users
+        // Unwanted users: blocked users, unfollowed users
+        let (followed_users, blocked_users) = match self.identity().await {
+            Some(identity) => (identity.following, identity.blocked),
+            None => (HashSet::new(), HashSet::new()),
+        };
+        // In case a user is somehow followed and blocked (additional checks should already prevent this)
+        let users_to_add: HashSet<_> = followed_users
+            .difference(&blocked_users)
+            .map(|x| x.to_owned())
+            .collect();
+        let local_users: HashSet<_> = DATABASE.all_local_users().into_par_iter().collect();
+        let users_to_delete: HashSet<_> = local_users
+            .difference(&users_to_add)
+            .map(|x| x.to_owned())
+            .collect();
+
+        for user_id in users_to_add {
+            let user = self.fetch_user(user_id).await?;
+            let (user_followed_users, user_blocked_users) = match user.identity {
+                Some(identity) => (identity.following, identity.blocked),
+                None => (HashSet::new(), HashSet::new()),
+            };
+            for user_user in user_followed_users.difference(&user_blocked_users) {
+                self.fetch_user(*user_user).await?;
             }
-            let blocked_users: Vec<OkuUser> = identity
-                .blocked
-                .par_iter()
-                .filter_map(|x| DATABASE.get_user(*x).ok().flatten())
-                .collect();
-            DATABASE.delete_users_with_posts(blocked_users)?;
         }
+        DATABASE.delete_by_author_ids(Vec::from_par_iter(users_to_delete))?;
         Ok(())
     }
 
@@ -643,7 +653,7 @@ impl OkuFs {
     /// The OkuNet posts within the home replica of the user with the given content authorship ID.
     pub async fn fetch_posts(&self, ticket: &DocTicket) -> miette::Result<Vec<OkuPost>> {
         match self
-            .fetch_directory_with_ticket(ticket, "/posts".into())
+            .fetch_directory_with_ticket(ticket, "/posts/".into())
             .await
         {
             Ok(post_files) => Ok(post_files
