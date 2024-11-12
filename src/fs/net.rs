@@ -168,7 +168,7 @@ impl OkuFs {
             post_files
                 .par_iter()
                 .filter_map(|(entry, bytes)| {
-                    toml::from_str::<OkuNote>(&String::from_utf8_lossy(bytes).to_string())
+                    toml::from_str::<OkuNote>(String::from_utf8_lossy(bytes).as_ref())
                         .ok()
                         .map(|x| OkuPost {
                             entry: entry.clone(),
@@ -177,6 +177,47 @@ impl OkuFs {
                 })
                 .collect(),
         )
+    }
+
+    /// Retrieves all posts containing a given tag, whether they are authored by the local user or an OkuNet user.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - A tag.
+    ///
+    /// # Returns
+    ///
+    /// A list of OkuNet posts with the given tag.
+    pub async fn all_posts_with_tag(&self, tag: String) -> Vec<OkuPost> {
+        let mut posts = HashSet::<_>::from_par_iter(self.posts().await.unwrap_or_default());
+        posts.extend(DATABASE.get_posts().unwrap_or_default());
+        posts
+            .into_par_iter()
+            .filter(|x| x.note.tags.contains(&tag))
+            .collect()
+    }
+
+    /// Retrieves the set of all tags that appear in posts authored by the local user or an OkuNet user.
+    ///
+    /// # Returns
+    ///
+    /// All tags that appear across all posts on the local machine.
+    pub async fn all_tags(&self) -> HashSet<String> {
+        let mut tags = HashSet::<_>::from_par_iter(
+            self.posts()
+                .await
+                .unwrap_or_default()
+                .into_par_iter()
+                .flat_map(|x| x.note.tags),
+        );
+        tags.extend(
+            DATABASE
+                .get_posts()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|x| x.note.tags),
+        );
+        tags
     }
 
     /// Retrieves an OkuNet post authored by the local user using its path.
@@ -193,13 +234,13 @@ impl OkuFs {
             .home_replica()
             .await
             .ok_or(miette::miette!("Home replica not set … "))?;
-        match self.read_file(namespace_id, path.clone().into()).await {
+        match self.read_file(namespace_id, path.clone()).await {
             Ok(bytes) => {
-                let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+                let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
                 Ok(OkuPost {
                     entry: self.get_entry(namespace_id, path).await?,
-                    note: note,
+                    note,
                 })
             }
             Err(e) => Err(miette::miette!("{}", e)),
@@ -216,7 +257,7 @@ impl OkuFs {
             .read_file(self.home_replica().await?, "/profile.toml".into())
             .await
             .ok()?;
-        Some(toml::from_str(&String::from_utf8_lossy(&profile_bytes).to_string()).ok()?)
+        toml::from_str(String::from_utf8_lossy(&profile_bytes).as_ref()).ok()
     }
 
     /// Replaces the current OkuNet identity of the local user.
@@ -242,7 +283,7 @@ impl OkuFs {
         validated_identity.following = validated_identity
             .following
             .difference(&validated_identity.blocked)
-            .map(|x| x.clone())
+            .copied()
             .collect();
 
         self.create_or_modify_file(
@@ -386,11 +427,11 @@ impl OkuFs {
             .content_bytes(&self.node)
             .await
             .map_err(|e| miette::miette!("{}", e))?;
-        let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+        let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
             .into_diagnostic()?;
         Ok(OkuPost {
             entry: entry.clone(),
-            note: note,
+            note,
         })
     }
 
@@ -441,10 +482,10 @@ impl OkuFs {
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
         let new_note = OkuNote {
-            url: url,
-            title: title,
-            body: body,
-            tags: tags,
+            url,
+            title,
+            body,
+            tags,
         };
         let post_path = match path {
             Some(given_path) => given_path,
@@ -475,7 +516,7 @@ impl OkuFs {
         self.delete_file(home_replica_id, path).await
     }
 
-    /// Refreshes any user data last retrieved longer than [`REPUBLISH_DELAY`](crate::discovery::REPUBLISH_DELAY) ago according to the system time; the users one is following, and the users they're following, are recorded locally.
+    /// Refreshes any user data last retrieved longer than [`REPUBLISH_DELAY`] ago according to the system time; the users one is following, and the users they're following, are recorded locally.
     /// Blocked users are not recorded.
     pub async fn refresh_users(&self) -> miette::Result<()> {
         // Wanted users: followed users
@@ -582,16 +623,13 @@ impl OkuFs {
             .await
             .map_err(|e| miette::miette!("{}", e))?;
         let namespace_id = ticket.capability.id();
-        match self
-            .fetch_file_with_ticket(&ticket, path.clone().into())
-            .await
-        {
+        match self.fetch_file_with_ticket(&ticket, path.clone()).await {
             Ok(bytes) => {
-                let note = toml::from_str::<OkuNote>(&String::from_utf8_lossy(&bytes).to_string())
+                let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
                 Ok(OkuPost {
                     entry: self.get_entry(namespace_id, path).await?,
-                    note: note,
+                    note,
                 })
             }
             Err(e) => Err(miette::miette!("{}", e)),
@@ -635,7 +673,7 @@ impl OkuFs {
             .await
         {
             Ok(profile_bytes) => Ok(toml::from_str(
-                &String::from_utf8_lossy(&profile_bytes).to_string(),
+                String::from_utf8_lossy(&profile_bytes).as_ref(),
             )
             .into_diagnostic()?),
             Err(e) => Err(miette::miette!("{}", e)),
@@ -659,7 +697,7 @@ impl OkuFs {
             Ok(post_files) => Ok(post_files
                 .par_iter()
                 .filter_map(|(entry, bytes)| {
-                    toml::from_str::<OkuNote>(&String::from_utf8_lossy(bytes).to_string())
+                    toml::from_str::<OkuNote>(String::from_utf8_lossy(bytes).as_ref())
                         .ok()
                         .map(|x| OkuPost {
                             entry: entry.clone(),
@@ -673,7 +711,7 @@ impl OkuFs {
 
     /// Obtain an OkuNet user's content, identified by their content authorship ID.
     ///
-    /// If last retrieved longer than [`REPUBLISH_DELAY`](crate::discovery::REPUBLISH_DELAY) ago according to the system time, a known user's content will be re-fetched.
+    /// If last retrieved longer than [`REPUBLISH_DELAY`] ago according to the system time, a known user's content will be re-fetched.
     ///
     /// # Arguments
     ///
@@ -718,15 +756,15 @@ impl OkuFs {
             DATABASE.upsert_posts(posts)?;
         }
         DATABASE.upsert_user(OkuUser {
-            author_id: author_id,
+            author_id,
             last_fetched: SystemTime::now(),
             posts: posts
                 .map(|x| x.into_par_iter().map(|y| y.entry).collect())
                 .unwrap_or_default(),
             identity: profile,
         })?;
-        Ok(DATABASE
+        DATABASE
             .get_user(author_id)?
-            .ok_or(miette::miette!("User {} not found … ", author_id))?)
+            .ok_or(miette::miette!("User {} not found … ", author_id))
     }
 }

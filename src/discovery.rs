@@ -20,7 +20,7 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to announce.
     pub async fn announce_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
         let ticket = mainline::Bytes::from(
-            self.create_document_ticket(namespace_id.clone(), ShareMode::Read)
+            self.create_document_ticket(namespace_id, ShareMode::Read)
                 .await?
                 .to_bytes(),
         );
@@ -29,7 +29,7 @@ impl OkuFs {
             .await? as i64;
         let replica_private_key = mainline::SigningKey::from_bytes(
             &self
-                .create_document_ticket(namespace_id.clone(), ShareMode::Write)
+                .create_document_ticket(namespace_id, ShareMode::Write)
                 .await?
                 .capability
                 .secret_key()
@@ -58,7 +58,7 @@ impl OkuFs {
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
         let ticket = mainline::Bytes::from(
-            self.create_document_ticket(home_replica.clone(), ShareMode::Read)
+            self.create_document_ticket(home_replica, ShareMode::Read)
                 .await?
                 .to_bytes(),
         );

@@ -19,7 +19,7 @@ jobs:
       - name: Checkout codebase
         uses: actions/checkout@v4
       - name: Generate documentation
-        run: time cargo doc --no-deps -Zrustdoc-map --release --quiet
+        run: time cargo doc --no-deps
       - name: Fix permissions
         run: |
           chmod -c -R +rX "target/doc/" | while read line; do
@@ -60,7 +60,7 @@ jobs:
     - name: Apply compiler suggestions
       run: |
         cargo fix --edition --edition-idioms --allow-dirty
-        cargo clippy --fix -Z unstable-options --allow-dirty
+        cargo clippy --fix --allow-dirty
     - name: Commit changes to code, if any
       run: |
         git config user.name github-actions

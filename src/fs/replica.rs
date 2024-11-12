@@ -115,7 +115,7 @@ impl OkuFs {
         namespace_id: NamespaceId,
         path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
-        let ticket = self.resolve_namespace_id(namespace_id.clone()).await?;
+        let ticket = self.resolve_namespace_id(namespace_id).await?;
         let docs_client = self.node.docs();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
@@ -142,8 +142,7 @@ impl OkuFs {
                 }
             }
             None => {
-                if let Some(replica) = docs_client.open(namespace_id.clone()).await.unwrap_or(None)
-                {
+                if let Some(replica) = docs_client.open(namespace_id).await.unwrap_or(None) {
                     replica
                         .set_download_policy(iroh::docs::store::DownloadPolicy::default())
                         .await?;
@@ -226,8 +225,7 @@ impl OkuFs {
                 replica
             }
             None => {
-                if let Some(replica) = docs_client.open(namespace_id.clone()).await.unwrap_or(None)
-                {
+                if let Some(replica) = docs_client.open(namespace_id).await.unwrap_or(None) {
                     replica
                         .set_download_policy(iroh::docs::store::DownloadPolicy::default())
                         .await?;
@@ -337,7 +335,7 @@ impl OkuFs {
     ) -> miette::Result<DocTicket> {
         if matches!(share_mode, ShareMode::Write)
             && matches!(
-                self.get_replica_capability(namespace_id.clone()).await?,
+                self.get_replica_capability(namespace_id).await?,
                 CapabilityKind::Read
             )
         {

@@ -330,7 +330,7 @@ impl OkuFs {
         namespace_id: NamespaceId,
         path: PathBuf,
     ) -> anyhow::Result<Bytes> {
-        match self.resolve_namespace_id(namespace_id.clone()).await {
+        match self.resolve_namespace_id(namespace_id).await {
             Ok(ticket) => match self.fetch_file_with_ticket(&ticket, path.clone()).await {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
@@ -391,9 +391,8 @@ impl OkuFs {
                 break;
             }
         }
-        Ok(self
-            .read_file(namespace_id, path)
+        self.read_file(namespace_id, path)
             .await
-            .map_err(|e| anyhow!("{}", e))?)
+            .map_err(|e| anyhow!("{}", e))
     }
 }

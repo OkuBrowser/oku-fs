@@ -119,7 +119,7 @@ pub struct OkuIdentity {
     pub blocked: HashSet<AuthorId>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[native_model(id = 2, version = 1)]
 #[native_db(
     primary_key(primary_key -> (Vec<u8>, Vec<u8>))
@@ -130,6 +130,18 @@ pub struct OkuPost {
     pub entry: Entry,
     /// The content of the post on OkuNet.
     pub note: OkuNote,
+}
+
+impl PartialEq for OkuPost {
+    fn eq(&self, other: &Self) -> bool {
+        self.primary_key() == other.primary_key()
+    }
+}
+impl Eq for OkuPost {}
+impl Hash for OkuPost {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.primary_key().hash(state);
+    }
 }
 
 impl From<OkuPost> for TantivyDocument {
@@ -276,7 +288,7 @@ impl OkuDatabase {
     ) -> miette::Result<Vec<OkuPost>> {
         let searcher = POST_INDEX_READER.searcher();
         let query_parser = QueryParser::for_index(
-            &*POST_INDEX,
+            &POST_INDEX,
             vec![
                 POST_SCHEMA.1["author_id"],
                 POST_SCHEMA.1["path"],
@@ -422,13 +434,13 @@ impl OkuDatabase {
     /// A list of all known OkuNet posts.
     pub fn get_posts(&self) -> miette::Result<Vec<OkuPost>> {
         let r = self.database.r_transaction().into_diagnostic()?;
-        Ok(r.scan()
+        r.scan()
             .primary()
             .into_diagnostic()?
             .all()
             .into_diagnostic()?
             .collect::<Result<Vec<_>, _>>()
-            .into_diagnostic()?)
+            .into_diagnostic()
     }
 
     /// Retrieves all known OkuNet posts by a given author.
@@ -495,7 +507,7 @@ impl OkuDatabase {
             author_id.as_bytes().to_vec(),
             path_to_entry_key(path).to_vec(),
         );
-        Ok(r.get().primary(entry_key).into_diagnostic()?)
+        r.get().primary(entry_key).into_diagnostic()
     }
 
     /// Insert or update an OkuNet user.
@@ -629,13 +641,13 @@ impl OkuDatabase {
     /// The OkuNet content of all users known to this node.
     pub fn get_users(&self) -> miette::Result<Vec<OkuUser>> {
         let r = self.database.r_transaction().into_diagnostic()?;
-        Ok(r.scan()
+        r.scan()
             .primary()
             .into_diagnostic()?
             .all()
             .into_diagnostic()?
             .collect::<Result<Vec<_>, _>>()
-            .into_diagnostic()?)
+            .into_diagnostic()
     }
 
     /// Gets an OkuNet user's content by their content authorship ID.
@@ -649,8 +661,8 @@ impl OkuDatabase {
     /// An OkuNet user's content.
     pub fn get_user(&self, author_id: AuthorId) -> miette::Result<Option<OkuUser>> {
         let r = self.database.r_transaction().into_diagnostic()?;
-        Ok(r.get()
+        r.get()
             .primary(author_id.as_bytes().to_vec())
-            .into_diagnostic()?)
+            .into_diagnostic()
     }
 }

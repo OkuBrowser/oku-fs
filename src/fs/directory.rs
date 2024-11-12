@@ -152,11 +152,9 @@ impl OkuFs {
             entries_deleted += document
                 .del(
                     file.author(),
-                    format!(
-                        "{}",
-                        std::str::from_utf8(&path_to_entry_prefix(entry_key_to_path(file.key())?))
-                            .into_diagnostic()?
-                    ),
+                    (std::str::from_utf8(&path_to_entry_prefix(entry_key_to_path(file.key())?))
+                        .into_diagnostic()?)
+                    .to_string(),
                 )
                 .await
                 .map_err(|e| {
@@ -261,9 +259,8 @@ impl OkuFs {
         let replica = self
             .fetch_replica_by_ticket(ticket, Some(path.clone()))
             .await?;
-        Ok(self
-            .read_directory_from_replica_handle(replica, path)
+        self.read_directory_from_replica_handle(replica, path)
             .await
-            .map_err(|e| anyhow!("{}", e))?)
+            .map_err(|e| anyhow!("{}", e))
     }
 }

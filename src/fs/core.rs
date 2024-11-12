@@ -34,15 +34,14 @@ impl OkuFs {
     /// The private key of the node's authorship credentials.
     pub async fn get_author(&self) -> anyhow::Result<Author> {
         let default_author_id = self.node.authors().default().await?;
-        Ok(self
-            .node
+        self.node
             .authors()
             .export(default_author_id)
             .await?
             .ok_or(anyhow!(
                 "Missing private key for default author ({}).",
                 default_author_id.fmt_short()
-            ))?)
+            ))
     }
 
     /// Starts an instance of an Oku file system.

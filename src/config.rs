@@ -51,11 +51,7 @@ impl OkuFsConfig {
 
     /// The home replica of the node.
     pub fn home_replica(&self) -> miette::Result<Option<NamespaceId>> {
-        Ok(self
-            .home_replica
-            .try_lock()
-            .map_err(|e| miette!("{}", e))?
-            .clone())
+        Ok(*self.home_replica.try_lock().map_err(|e| miette!("{}", e))?)
     }
 
     /// Sets the home replica of the node.
