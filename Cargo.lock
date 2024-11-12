@@ -3182,13 +3182,11 @@ name = "oku-fs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "bs58",
  "bytes",
  "cfg-if",
  "chrono",
  "clap",
- "derive_more",
  "env_logger",
  "fuse_mt",
  "fuser",
