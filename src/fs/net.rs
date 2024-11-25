@@ -2,7 +2,12 @@ use std::{collections::HashSet, path::PathBuf, time::SystemTime};
 
 use crate::{
     config::OkuFsConfig,
-    database::{OkuIdentity, OkuNote, OkuPost, OkuUser, DATABASE},
+    database::{
+        core::DATABASE,
+        dht::ReplicaAnnouncement,
+        posts::{OkuNote, OkuPost},
+        users::{OkuIdentity, OkuUser},
+    },
     discovery::REPUBLISH_DELAY,
     fs::{merge_tickets, OkuFs},
 };
@@ -598,6 +603,10 @@ impl OkuFs {
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {
+            let _ = DATABASE.upsert_announcement(ReplicaAnnouncement {
+                key: mutable_item.key().to_vec(),
+                signature: mutable_item.signature().to_vec(),
+            });
             tickets.push(DocTicket::from_bytes(mutable_item.value())?)
         }
         merge_tickets(tickets).ok_or(anyhow!(

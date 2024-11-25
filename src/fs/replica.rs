@@ -1,5 +1,7 @@
 use super::*;
 use crate::config::OkuFsConfig;
+use crate::database::core::DATABASE;
+use crate::database::dht::ReplicaAnnouncement;
 use crate::error::{OkuDiscoveryError, OkuFsError, OkuFuseError};
 use anyhow::anyhow;
 use futures::{pin_mut, StreamExt};
@@ -309,6 +311,10 @@ impl OkuFs {
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {
+            let _ = DATABASE.upsert_announcement(ReplicaAnnouncement {
+                key: mutable_item.key().to_vec(),
+                signature: mutable_item.signature().to_vec(),
+            });
             tickets.push(DocTicket::from_bytes(mutable_item.value())?)
         }
         merge_tickets(tickets).ok_or(anyhow!(
