@@ -52,6 +52,8 @@ pub struct OkuFs {
     pub(crate) node: Iroh,
     /// A watcher for when replicas are created, deleted, or imported.
     pub replica_sender: Sender<()>,
+    /// A watcher for whether or not content is being fetched from the OkuNet.
+    pub okunet_fetch_sender: Sender<bool>,
     #[cfg(feature = "fuse")]
     /// The handles pointing to paths within the file system; used by FUSE.
     pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,

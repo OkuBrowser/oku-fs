@@ -122,11 +122,13 @@ impl OkuFs {
         info!("Default author ID is {} … ", default_author_id.fmt_short());
 
         let (replica_sender, _replica_receiver) = watch::channel(());
+        let (okunet_fetch_sender, _okunet_fetch_receiver) = watch::channel(false);
 
         let oku_fs = Self {
             running_node,
             node,
             replica_sender,
+            okunet_fetch_sender,
             #[cfg(feature = "fuse")]
             fs_handles: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "fuse")]

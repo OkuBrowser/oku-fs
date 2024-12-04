@@ -599,6 +599,7 @@ impl OkuFs {
     ///
     /// A ticket for the home replica of the user with the given content authorship ID.
     pub async fn resolve_author_id(&self, author_id: AuthorId) -> anyhow::Result<DocTicket> {
+        self.okunet_fetch_sender.send_replace(true);
         let get_stream = self.dht.get_mutable(author_id.as_bytes(), None, None)?;
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
@@ -609,6 +610,7 @@ impl OkuFs {
             });
             tickets.push(DocTicket::from_bytes(mutable_item.value())?)
         }
+        self.okunet_fetch_sender.send_replace(false);
         merge_tickets(tickets).ok_or(anyhow!(
             "Could not find tickets for {} … ",
             author_id.to_string()
@@ -755,6 +757,7 @@ impl OkuFs {
     ///
     /// The latest version of an OkuNet user's content.
     pub async fn fetch_user(&self, author_id: AuthorId) -> miette::Result<OkuUser> {
+        self.okunet_fetch_sender.send_replace(true);
         let ticket = self
             .resolve_author_id(author_id)
             .await
@@ -772,6 +775,7 @@ impl OkuFs {
                 .unwrap_or_default(),
             identity: profile,
         })?;
+        self.okunet_fetch_sender.send_replace(false);
         DATABASE
             .get_user(author_id)?
             .ok_or(miette::miette!("User {} not found … ", author_id))
