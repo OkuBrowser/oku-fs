@@ -64,8 +64,10 @@ impl OkuFs {
             OkuFsError::CannotListReplicas
         })?;
         pin_mut!(replicas);
-        let mut replica_ids: Vec<(NamespaceId, CapabilityKind)> =
-            replicas.map(|replica| replica.unwrap()).collect().await;
+        let mut replica_ids: Vec<(NamespaceId, CapabilityKind)> = replicas
+            .filter_map(|replica| async move { replica.ok() })
+            .collect()
+            .await;
 
         let config = OkuFsConfig::load_or_create_config()?;
         if let Some(home_replica) = config.home_replica()? {

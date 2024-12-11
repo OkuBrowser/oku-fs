@@ -40,7 +40,7 @@ impl OkuFs {
             .flatten()
             .ok_or(anyhow::anyhow!(
                 "Missing private key for default author ({}).",
-                default_author_id.fmt_short()
+                iroh_base::base32::fmt_short(default_author_id)
             ))
     }
 
@@ -92,7 +92,7 @@ impl OkuFs {
             .await?;
         info!(
             "Default author ID is {} … ",
-            docs_engine.client().authors().default().await?.fmt_short()
+            iroh_base::base32::fmt_short(docs_engine.client().authors().default().await?)
         );
 
         let (replica_sender, _replica_receiver) = watch::channel(());

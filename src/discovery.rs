@@ -80,8 +80,8 @@ impl OkuFs {
             .ok()
             .flatten()
             .ok_or(miette::miette!(
-                "Prior announcement not found in database for replica {:?} … ",
-                namespace_id
+                "Prior announcement not found in database for replica {} … ",
+                iroh_base::base32::fmt(namespace_id)
             ))?;
 
         let ticket = mainline::Bytes::from(
