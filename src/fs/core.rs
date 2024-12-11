@@ -1,18 +1,14 @@
 use super::*;
 use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
-use crate::error::OkuFsError;
 use anyhow::anyhow;
+use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
-use futures::StreamExt;
-use iroh::docs::Author;
-use iroh::net::discovery::dns::DnsDiscovery;
-use iroh::net::discovery::pkarr::PkarrPublisher;
-use iroh::{
-    net::discovery::{ConcurrentDiscovery, Discovery},
-    node::FsNode,
-};
+use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
+use iroh_blobs::store::{Map, Store};
+use iroh_docs::Author;
 use log::{error, info};
+#[cfg(feature = "fuse")]
 use miette::IntoDiagnostic;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 #[cfg(feature = "fuse")]
@@ -33,12 +29,16 @@ impl OkuFs {
     ///
     /// The private key of the node's authorship credentials.
     pub async fn get_author(&self) -> anyhow::Result<Author> {
-        let default_author_id = self.node.authors().default().await?;
-        self.node
+        let default_author_id = self.docs_engine.default_author.get();
+
+        self.docs_engine
+            .client()
             .authors()
             .export(default_author_id)
-            .await?
-            .ok_or(anyhow!(
+            .await
+            .ok()
+            .flatten()
+            .ok_or(anyhow::anyhow!(
                 "Missing private key for default author ({}).",
                 default_author_id.fmt_short()
             ))
@@ -54,79 +54,56 @@ impl OkuFs {
     /// # Returns
     ///
     /// A running instance of an Oku file system.
-    pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> miette::Result<Self> {
-        let (running_node, node) = match iroh::client::Iroh::connect_path(NODE_PATH.clone()).await {
-            Ok(node) => (None, node),
-            Err(e) => {
-                error!("{}", e);
-                let node = FsNode::persistent(&*NODE_PATH)
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuFsError::CannotStartNode
-                    })?
-                    .enable_docs()
-                    .enable_rpc()
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuFsError::CannotStartNode
-                    })?
-                    .spawn()
-                    .await
-                    .map_err(|e| {
-                        error!("{}", e);
-                        OkuFsError::CannotStartNode
-                    })?;
-                let node_addr = node.net().node_addr().await.map_err(|e| {
-                    error!("{}", e);
-                    OkuFsError::CannotRetrieveNodeAddress
-                })?;
-                let addr_info = node_addr.info;
-                let magic_endpoint = node.endpoint();
-                let secret_key = magic_endpoint.secret_key();
-                let mut discovery_service = ConcurrentDiscovery::empty();
-                let pkarr = PkarrPublisher::n0_dns(secret_key.clone());
-                let dns = DnsDiscovery::n0_dns();
-                discovery_service.add(pkarr);
-                discovery_service.add(dns);
-                discovery_service.publish(&addr_info);
-                (Some(node.clone()), node.client().clone())
-            }
-        };
-        let authors = node.authors().list().await.map_err(|e| {
-            error!("{}", e);
-            OkuFsError::CannotRetrieveAuthors
-        })?;
-        futures::pin_mut!(authors);
-        let authors_count = authors.as_mut().count().await.to_owned();
-        let default_author_id = if authors_count == 0 {
-            let new_author_id = node.authors().create().await.map_err(|e| {
-                error!("{}", e);
-                OkuFsError::AuthorCannotBeCreated
-            })?;
-            node.authors()
-                .set_default(new_author_id)
-                .await
-                .map_err(|e| {
-                    error!("{}", e);
-                    OkuFsError::AuthorCannotBeCreated
-                })?;
-            new_author_id
-        } else {
-            node.authors().default().await.map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotRetrieveDefaultAuthor
-            })?
-        };
-        info!("Default author ID is {} … ", default_author_id.fmt_short());
+    pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> anyhow::Result<Self> {
+        let local_pool = Arc::new(iroh_blobs::util::local_pool::LocalPool::default());
+        let endpoint = iroh::Endpoint::builder()
+            .discovery_n0()
+            .discovery_dht()
+            .discovery_local_network()
+            .bind()
+            .await?;
+        let blobs = iroh_blobs::net_protocol::Blobs::persistent(BLOBS_PATH.clone())
+            .await?
+            .build(local_pool.handle(), &endpoint);
+        let gossip = iroh_gossip::net::Gossip::from_endpoint(
+            endpoint.clone(),
+            iroh_gossip::proto::topic::Config::default(),
+            &iroh::AddrInfo::default(),
+        );
+
+        let replica_store = iroh_docs::store::fs::Store::persistent(DOCS_PATH.clone())?;
+        let docs_engine = Arc::new(
+            iroh_docs::engine::Engine::spawn(
+                endpoint.clone(),
+                gossip,
+                replica_store,
+                blobs.store().clone(),
+                blobs.downloader().clone(),
+                iroh_docs::engine::DefaultAuthorStorage::Persistent(DEFAULT_AUTHOR_PATH.clone()),
+                local_pool.handle().clone(),
+            )
+            .await?,
+        );
+
+        let router = iroh::protocol::Router::builder(endpoint.clone())
+            .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(iroh_docs::ALPN, docs_engine.clone())
+            .spawn()
+            .await?;
+        info!(
+            "Default author ID is {} … ",
+            docs_engine.client().authors().default().await?.fmt_short()
+        );
 
         let (replica_sender, _replica_receiver) = watch::channel(());
         let (okunet_fetch_sender, _okunet_fetch_receiver) = watch::channel(false);
 
         let oku_fs = Self {
-            running_node,
-            node,
+            local_pool,
+            endpoint,
+            blobs,
+            docs_engine,
+            router,
             replica_sender,
             okunet_fetch_sender,
             #[cfg(feature = "fuse")]
@@ -135,7 +112,7 @@ impl OkuFs {
             newest_handle: Arc::new(RwLock::new(0)),
             #[cfg(feature = "fuse")]
             handle: handle.clone(),
-            dht: mainline::Dht::server().into_diagnostic()?.as_async(),
+            dht: mainline::Dht::server()?.as_async(),
         };
         let oku_fs_clone = oku_fs.clone();
         tokio::spawn(async move {
@@ -156,17 +133,43 @@ impl OkuFs {
     }
 
     /// Shuts down the Oku file system.
-    pub async fn shutdown(self) -> miette::Result<()> {
-        match self.running_node {
-            Some(running_node) => Ok(running_node.shutdown().await.map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotStopNode
-            })?),
-            None => Ok(self.node.shutdown(false).await.map_err(|e| {
-                error!("{}", e);
-                OkuFsError::CannotStopNode
-            })?),
+    pub async fn shutdown(self) {
+        let _ = self.endpoint.close().await;
+        let _ = self.router.shutdown().await;
+        let _ = self.docs_engine.shutdown().await;
+        self.docs_engine.blob_store().shutdown().await;
+        self.blobs.store().shutdown().await;
+        if let Some(local_pool) = Arc::into_inner(self.local_pool) {
+            local_pool.shutdown().await
         }
+    }
+
+    /// Retrieve the content of a document entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - An entry in an Iroh document.
+    ///
+    /// # Returns
+    ///
+    /// Tye content of the entry, as raw bytes.
+    pub async fn content_bytes(&self, entry: &iroh_docs::Entry) -> anyhow::Result<Bytes> {
+        let mut data_reader = self
+            .docs_engine
+            .blob_store()
+            .get(&entry.content_hash())
+            .await
+            .ok()
+            .flatten()
+            .map(|x| x.data_reader())
+            .ok_or(anyhow!(
+                "Unable to get data reader for document entry {} … ",
+                String::from_utf8_lossy(entry.key())
+            ))?;
+        data_reader
+            .read_at(0, usize::MAX)
+            .await
+            .map_err(|e| anyhow!("{}", e))
     }
 
     /// Determines the oldest timestamp of a file entry in any replica stored locally.
@@ -228,6 +231,6 @@ impl OkuFs {
     ///
     /// A handle referencing the mounted file system; joining or dropping the handle will unmount the file system and shutdown the node.
     pub fn mount(&self, path: PathBuf) -> miette::Result<fuser::BackgroundSession> {
-        Ok(spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()?)
+        spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()
     }
 }

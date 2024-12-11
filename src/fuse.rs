@@ -20,8 +20,8 @@ use fuse_mt::ResultWrite;
 use fuse_mt::ResultXTimes;
 use fuse_mt::ResultXattr;
 use fuse_mt::Statfs;
-use iroh::client::docs::Entry;
-use iroh::docs::NamespaceId;
+use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::NamespaceId;
 use log::debug;
 use log::error;
 use log::info;
@@ -39,7 +39,6 @@ use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::SystemTime;
 
 /// Parse a FUSE path to retrieve the replica and path.
@@ -56,8 +55,10 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
     if let Some(_root) = components.next() {
         if let Some(replica_id) = components.next() {
             let replica_id_string = replica_id.as_os_str().to_str().unwrap_or_default();
-            let namespace_id = NamespaceId::from_str(replica_id_string)
-                .map_err(|_| OkuFuseError::NoReplica(replica_id_string.to_string()))?;
+            let namespace_id = NamespaceId::from(
+                iroh_base::base32::parse_array_hex_or_base32::<32>(replica_id_string)
+                    .unwrap_or_default(),
+            );
             let replica_path = PathBuf::from("/").join(components.as_path()).to_path_buf();
             return Ok(Some((namespace_id, replica_path)));
         } else {
@@ -258,8 +259,8 @@ impl OkuFs {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
             let fs_entry_permission = match self.get_replica_capability(namespace_id).await? {
-                iroh::docs::CapabilityKind::Read => 0o444u16,
-                iroh::docs::CapabilityKind::Write => 0o777u16,
+                iroh_docs::CapabilityKind::Read => 0o444u16,
+                iroh_docs::CapabilityKind::Write => 0o777u16,
             };
             let fs_entry_type = self.is_file_or_directory(path).await?;
             match fs_entry_type {
@@ -335,39 +336,41 @@ impl OkuFs {
                 }
                 _ => unreachable!(),
             }
-        } else {
-            if path.to_path_buf() == PathBuf::from("/") {
-                let root_creation_time_estimate = self.get_oldest_timestamp().await?;
-                let root_modification_time_estimate = self.get_newest_timestamp().await?;
-                let root_size_estimate = self.get_size().await?;
-                Ok(FileAttr {
-                    size: root_size_estimate,
-                    blocks: 0,
-                    atime: SystemTime::now(),
-                    mtime: SystemTime::from(
-                        chrono::Utc.timestamp_nanos(
-                            (root_modification_time_estimate * 1000)
-                                .try_into()
-                                .unwrap_or(0),
-                        ),
+        } else if path.to_path_buf() == PathBuf::from("/") {
+            let root_creation_time_estimate = self.get_oldest_timestamp().await?;
+            let root_modification_time_estimate = self.get_newest_timestamp().await?;
+            let root_size_estimate = self.get_size().await?;
+            Ok(FileAttr {
+                size: root_size_estimate,
+                blocks: 0,
+                atime: SystemTime::now(),
+                mtime: SystemTime::from(
+                    chrono::Utc.timestamp_nanos(
+                        (root_modification_time_estimate * 1000)
+                            .try_into()
+                            .unwrap_or(0),
                     ),
-                    ctime: SystemTime::from(chrono::Utc.timestamp_nanos(
+                ),
+                ctime: SystemTime::from(
+                    chrono::Utc.timestamp_nanos(
                         (root_creation_time_estimate * 1000).try_into().unwrap_or(0),
-                    )),
-                    crtime: SystemTime::from(chrono::Utc.timestamp_nanos(
+                    ),
+                ),
+                crtime: SystemTime::from(
+                    chrono::Utc.timestamp_nanos(
                         (root_creation_time_estimate * 1000).try_into().unwrap_or(0),
-                    )),
-                    kind: fuse_mt::FileType::Directory,
-                    perm: 0o444u16,
-                    nlink: 0,
-                    uid: 0,
-                    gid: 0,
-                    rdev: 0,
-                    flags: 0,
-                })
-            } else {
-                Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
-            }
+                    ),
+                ),
+                kind: fuse_mt::FileType::Directory,
+                perm: 0o444u16,
+                nlink: 0,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                flags: 0,
+            })
+        } else {
+            Err(OkuFuseError::NoFileAtPath(path.to_path_buf()).into())
         }
     }
 }
@@ -375,12 +378,11 @@ impl OkuFs {
 impl FilesystemMT for OkuFs {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
         trace!("init() called");
-        return Ok(());
+        Ok(())
     }
 
     fn destroy(&self) {
-        let _ = self
-            .handle
+        self.handle
             .block_on(async move { self.clone().shutdown().await });
         info!("Node unmounting and shutting down … ");
     }
@@ -390,7 +392,7 @@ impl FilesystemMT for OkuFs {
         // Potential improvement: spawn a new thread to block on.
         let fs_entry_attr_result = self
             .handle
-            .block_on(async { self.get_fs_entry_attributes(&path).await });
+            .block_on(async { self.get_fs_entry_attributes(path).await });
         match fs_entry_attr_result {
             Ok(fs_entry_attr) => Ok((std::time::Duration::from_secs(0), fs_entry_attr)),
             Err(e) => {
@@ -425,7 +427,7 @@ impl FilesystemMT for OkuFs {
             path, fh, offset, size
         );
 
-        match parse_fuse_path(&path) {
+        match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => {
                     // Potential improvement: spawn a new thread to block on.
@@ -438,11 +440,11 @@ impl FilesystemMT for OkuFs {
                                 return callback(Ok(&[]));
                             }
                             if size as u64 + offset > bytes.len() as u64 {
-                                return callback(Ok(&bytes[offset as usize..]));
+                                callback(Ok(&bytes[offset as usize..]))
                             } else {
-                                return callback(Ok(
+                                callback(Ok(
                                     &bytes[offset as usize..offset as usize + size as usize]
-                                ));
+                                ))
                             }
                         }
                         Err(e) => {
@@ -468,17 +470,17 @@ impl FilesystemMT for OkuFs {
 
     fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
         trace!("[flush] path = {:?}, fh = {}", path, fh);
-        return Ok(());
+        Ok(())
     }
 
     fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, _datasync: bool) -> ResultEmpty {
         trace!("[fsync] path = {:?}, fh = {}", path, fh);
-        return Ok(());
+        Ok(())
     }
 
     fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, _datasync: bool) -> ResultEmpty {
         trace!("[fsyncdir] path = {:?}, fh = {}", path, fh);
-        return Ok(());
+        Ok(())
     }
 
     fn release(
@@ -529,7 +531,7 @@ impl FilesystemMT for OkuFs {
                 kind: fuse_mt::FileType::Directory,
             },
         ];
-        match parse_fuse_path(&path) {
+        match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => {
                     let files_result = self.handle.block_on(async {
@@ -560,7 +562,7 @@ impl FilesystemMT for OkuFs {
                         Ok(replicas) => {
                             for (replica, _capability_kind) in replicas {
                                 directory_entries.push(DirectoryEntry {
-                                    name: replica.to_string().into(),
+                                    name: iroh_base::base32::fmt(replica).into(),
                                     kind: fuse_mt::FileType::Directory,
                                 });
                             }
@@ -621,7 +623,7 @@ impl FilesystemMT for OkuFs {
             frsize: 0,
         };
 
-        return Ok(statfs);
+        Ok(statfs)
     }
 
     fn rmdir(&self, _req: RequestInfo, parent: &Path, name: &OsStr) -> ResultEmpty {
@@ -695,7 +697,7 @@ impl FilesystemMT for OkuFs {
                                         ttl: std::time::Duration::from_secs(0),
                                         attr: file_attr,
                                         fh: file_handle,
-                                        flags: flags,
+                                        flags,
                                     }),
                                     Err(e) => {
                                         error!("[create]: {}", e);
@@ -809,7 +811,7 @@ impl FilesystemMT for OkuFs {
 
         let fs_entry_attr_result = self
             .handle
-            .block_on(async { self.get_fs_entry_attributes(&path).await });
+            .block_on(async { self.get_fs_entry_attributes(path).await });
         match fs_entry_attr_result {
             Ok(fs_entry_attr) => {
                 trace!("[access] permission: {:#06o}", fs_entry_attr.perm);
@@ -848,7 +850,7 @@ impl FilesystemMT for OkuFs {
             flags
         );
 
-        match parse_fuse_path(&path) {
+        match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
                     match self.read_file(namespace_id, replica_path.clone()).await {
@@ -941,7 +943,7 @@ impl FilesystemMT for OkuFs {
             path, fh, size
         );
 
-        match parse_fuse_path(&path) {
+        match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
                     match self.read_file(namespace_id, replica_path).await {
@@ -1101,7 +1103,7 @@ impl FilesystemMT for OkuFs {
             "[setxattr] path = {:?}, name = {:?}, value = {:#?}, flags = {:#06o}, position = {}",
             path,
             name,
-            std::str::from_utf8(&value),
+            std::str::from_utf8(value),
             flags,
             position
         );

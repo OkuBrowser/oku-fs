@@ -3,10 +3,11 @@ use crate::error::OkuFsError;
 use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{future, pin_mut, StreamExt};
-use iroh::client::docs::Entry;
-use iroh::client::Doc;
-use iroh::docs::DocTicket;
-use iroh::{base::hash::Hash, docs::NamespaceId};
+use iroh_base::hash::Hash;
+use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::store::FilterKind;
+use iroh_docs::DocTicket;
+use iroh_docs::NamespaceId;
 use log::error;
 use miette::IntoDiagnostic;
 use rayon::iter::{
@@ -32,41 +33,10 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Vec<(Entry, Bytes)>> {
         let entries = self.list_files(namespace_id, Some(path)).await?;
-        let bytes =
-            future::try_join_all(entries.iter().map(|entry| entry.content_bytes(&self.node)))
-                .await
-                .map_err(|e| miette::miette!("{}", e))?;
-        Ok(entries.into_par_iter().zip(bytes.into_par_iter()).collect())
-    }
-
-    /// Reads the contents of the files in a directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `document` - A handle to the replica containing the folder.
-    ///
-    /// * `path` - The folder whose contents will be read.
-    ///
-    /// # Returns
-    ///
-    /// A list of file entries and the corresponding content as bytes.
-    pub async fn read_directory_from_replica_handle(
-        &self,
-        document: Doc,
-        path: PathBuf,
-    ) -> miette::Result<Vec<(Entry, Bytes)>> {
-        let query = iroh::docs::store::Query::single_latest_per_key()
-            .key_prefix(path_to_entry_prefix(path))
-            .build();
-        let entries = document
-            .get_many(query)
+        let bytes = future::try_join_all(entries.iter().map(|entry| self.content_bytes(entry)))
             .await
             .map_err(|e| miette::miette!("{}", e))?;
-        Ok(entries
-            .filter_map(|x| async move { x.ok() })
-            .filter_map(|x| async { x.content_bytes(&document).await.ok().map(|y| (x, y)) })
-            .collect::<Vec<_>>()
-            .await)
+        Ok(entries.into_par_iter().zip(bytes.into_par_iter()).collect())
     }
 
     /// Moves a directory by copying it to a new location and deleting the original.
@@ -129,7 +99,7 @@ impl OkuFs {
     ) -> miette::Result<usize> {
         let path = normalise_path(path).join(""); // Ensure path ends with a slash
         let file_key = path_to_entry_prefix(path);
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -139,7 +109,7 @@ impl OkuFs {
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let mut entries_deleted = 0;
-        let query = iroh::docs::store::Query::single_latest_per_key()
+        let query = iroh_docs::store::Query::single_latest_per_key()
             .key_prefix(file_key)
             .build();
         let entries = document.get_many(query).await.map_err(|e| {
@@ -255,11 +225,11 @@ impl OkuFs {
         &self,
         ticket: &DocTicket,
         path: PathBuf,
+        filters: Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Vec<(Entry, Bytes)>> {
-        let replica = self
-            .fetch_replica_by_ticket(ticket, Some(path.clone()))
+        self.fetch_replica_by_ticket(ticket, Some(path.clone()), filters)
             .await?;
-        self.read_directory_from_replica_handle(replica, path)
+        self.read_directory(ticket.capability.id(), path)
             .await
             .map_err(|e| anyhow!("{}", e))
     }

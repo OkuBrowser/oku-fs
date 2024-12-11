@@ -1,7 +1,8 @@
 use super::core::*;
 use super::users::*;
 use crate::fs::{path_to_entry_key, FS_PATH};
-use iroh::{client::docs::Entry, docs::AuthorId};
+use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::AuthorId;
 use miette::IntoDiagnostic;
 use native_db::*;
 use native_model::{native_model, Model};
@@ -94,7 +95,10 @@ impl From<OkuPost> for TantivyDocument {
 
         let mut doc = TantivyDocument::default();
         doc.add_bytes(POST_SCHEMA.1["id"], post_key_bytes);
-        doc.add_text(POST_SCHEMA.1["author_id"], value.entry.author().to_string());
+        doc.add_text(
+            POST_SCHEMA.1["author_id"],
+            iroh_base::base32::fmt(value.entry.author()),
+        );
         doc.add_text(
             POST_SCHEMA.1["path"],
             String::from_utf8_lossy(value.entry.key()),

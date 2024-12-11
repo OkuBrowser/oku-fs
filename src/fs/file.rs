@@ -3,12 +3,13 @@ use crate::error::OkuFsError;
 use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
-use iroh::client::docs::Entry;
-use iroh::client::docs::LiveEvent::SyncFinished;
-use iroh::client::Doc;
-use iroh::docs::store::FilterKind;
-use iroh::docs::DocTicket;
-use iroh::{base::hash::Hash, docs::NamespaceId};
+use iroh_base::hash::Hash;
+use iroh_docs::engine::LiveEvent;
+use iroh_docs::rpc::client::docs::Doc;
+use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::store::FilterKind;
+use iroh_docs::DocTicket;
+use iroh_docs::NamespaceId;
 use log::{error, info};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ impl OkuFs {
         namespace_id: NamespaceId,
         path: Option<PathBuf>,
     ) -> miette::Result<Vec<Entry>> {
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -41,11 +42,11 @@ impl OkuFs {
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let query = if let Some(path) = path {
             let file_key = path_to_entry_prefix(path);
-            iroh::docs::store::Query::single_latest_per_key()
+            iroh_docs::store::Query::single_latest_per_key()
                 .key_prefix(file_key)
                 .build()
         } else {
-            iroh::docs::store::Query::single_latest_per_key().build()
+            iroh_docs::store::Query::single_latest_per_key().build()
         };
         let entries = document.get_many(query).await.map_err(|e| {
             error!("{}", e);
@@ -77,7 +78,7 @@ impl OkuFs {
     ) -> miette::Result<Hash> {
         let file_key = path_to_entry_key(path);
         let data_bytes = data.into();
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -87,14 +88,7 @@ impl OkuFs {
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
-            .set_bytes(
-                self.node.authors().default().await.map_err(|e| {
-                    error!("{}", e);
-                    OkuFsError::CannotRetrieveDefaultAuthor
-                })?,
-                file_key,
-                data_bytes,
-            )
+            .set_bytes(self.default_author(), file_key, data_bytes)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -121,7 +115,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<usize> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -130,7 +124,7 @@ impl OkuFs {
                 OkuFsError::CannotOpenReplica
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::docs::store::Query::single_latest_per_key()
+        let query = iroh_docs::store::Query::single_latest_per_key()
             .key_exact(file_key)
             .build();
         let entry = document
@@ -168,7 +162,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Entry> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -177,7 +171,7 @@ impl OkuFs {
                 OkuFsError::CannotOpenReplica
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::docs::store::Query::single_latest_per_key()
+        let query = iroh_docs::store::Query::single_latest_per_key()
             .key_exact(file_key)
             .build();
         let entry = document
@@ -208,7 +202,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<u64> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let document = docs_client
             .open(namespace_id)
             .await
@@ -217,7 +211,7 @@ impl OkuFs {
                 OkuFsError::CannotOpenReplica
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        let query = iroh::docs::store::Query::all().key_exact(file_key).build();
+        let query = iroh_docs::store::Query::all().key_exact(file_key).build();
         let entries = document.get_many(query).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotListFiles
@@ -247,7 +241,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Bytes> {
         let entry = self.get_entry(namespace_id, path).await?;
-        Ok(entry.content_bytes(&self.node).await.map_err(|e| {
+        Ok(self.content_bytes(&entry).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotReadFile
         })?)
@@ -270,7 +264,7 @@ impl OkuFs {
         path: PathBuf,
     ) -> miette::Result<Bytes> {
         let file_key = path_to_entry_key(path);
-        let query = iroh::docs::store::Query::single_latest_per_key()
+        let query = iroh_docs::store::Query::single_latest_per_key()
             .key_exact(file_key)
             .build();
         let entry = document
@@ -278,8 +272,7 @@ impl OkuFs {
             .await
             .map_err(|e| miette::miette!("{}", e))?
             .ok_or(OkuFsError::FsEntryNotFound)?;
-        entry
-            .content_bytes(&document)
+        self.content_bytes(&entry)
             .await
             .map_err(|e| miette::miette!("{}", e))
     }
@@ -329,9 +322,13 @@ impl OkuFs {
         &self,
         namespace_id: NamespaceId,
         path: PathBuf,
+        filters: Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
         match self.resolve_namespace_id(namespace_id).await {
-            Ok(ticket) => match self.fetch_file_with_ticket(&ticket, path.clone()).await {
+            Ok(ticket) => match self
+                .fetch_file_with_ticket(&ticket, path.clone(), filters)
+                .await
+            {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
                     error!("{}", e);
@@ -366,27 +363,26 @@ impl OkuFs {
         &self,
         ticket: &DocTicket,
         path: PathBuf,
+        filters: Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let replica = docs_client
             .import_namespace(ticket.capability.clone())
             .await?;
-        let filter = FilterKind::Exact(path_to_entry_key(path.clone()));
+        let filters = filters.unwrap_or(vec![FilterKind::Exact(path_to_entry_key(path.clone()))]);
         replica
-            .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
-                filter,
-            ]))
+            .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(filters))
             .await?;
         replica.start_sync(ticket.nodes.clone()).await?;
         let namespace_id = ticket.capability.id();
         let mut events = replica.subscribe().await?;
         let sync_start = std::time::Instant::now();
         while let Some(event) = events.next().await {
-            if matches!(event?, SyncFinished { .. }) {
+            if matches!(event?, LiveEvent::SyncFinished(_)) {
                 let elapsed = sync_start.elapsed();
                 info!(
                     "Synchronisation took {elapsed:?} for {} … ",
-                    namespace_id.to_string(),
+                    iroh_base::base32::fmt(namespace_id),
                 );
                 break;
             }

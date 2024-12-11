@@ -19,3 +19,7 @@ pub mod fuse;
 #[cfg(feature = "fuse")]
 pub use fuser;
 pub use iroh;
+pub use iroh_base;
+pub use iroh_blobs;
+pub use iroh_docs;
+pub use iroh_gossip;

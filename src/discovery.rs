@@ -1,9 +1,10 @@
 use crate::database::core::DATABASE;
 use crate::{error::OkuDiscoveryError, fs::OkuFs};
-use iroh::base::ticket::Ticket;
-use iroh::blobs::HashAndFormat;
-use iroh::docs::CapabilityKind;
-use iroh::{client::docs::ShareMode, docs::NamespaceId};
+use iroh_base::hash::HashAndFormat;
+use iroh_base::ticket::Ticket;
+use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::sync::CapabilityKind;
+use iroh_docs::NamespaceId;
 use log::{error, info};
 use miette::IntoDiagnostic;
 use std::{path::PathBuf, time::Duration};
@@ -45,11 +46,14 @@ impl OkuFs {
         let mutable_item =
             mainline::MutableItem::new(replica_private_key, ticket, newest_timestamp, None);
         match self.dht.put_mutable(mutable_item).await {
-            Ok(_) => info!("Announced mutable replica {} … ", namespace_id.to_string()),
+            Ok(_) => info!(
+                "Announced mutable replica {} … ",
+                iroh_base::base32::fmt(namespace_id)
+            ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    namespace_id.to_string(),
+                    iroh_base::base32::fmt(namespace_id),
                     e.to_string()
                 )
             ),
@@ -102,12 +106,12 @@ impl OkuFs {
         match self.dht.put_mutable(mutable_item).await {
             Ok(_) => info!(
                 "Announced immutable replica {} … ",
-                namespace_id.to_string()
+                iroh_base::base32::fmt(namespace_id)
             ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    namespace_id.to_string(),
+                    iroh_base::base32::fmt(namespace_id),
                     e.to_string()
                 )
             ),
@@ -157,11 +161,14 @@ impl OkuFs {
         let mutable_item =
             mainline::MutableItem::new(author_private_key, ticket, newest_timestamp, None);
         match self.dht.put_mutable(mutable_item).await {
-            Ok(_) => info!("Announced home replica {} … ", home_replica.to_string()),
+            Ok(_) => info!(
+                "Announced home replica {} … ",
+                iroh_base::base32::fmt(home_replica)
+            ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    home_replica.to_string(),
+                    iroh_base::base32::fmt(home_replica),
                     e.to_string()
                 )
             ),
@@ -200,7 +207,7 @@ impl OkuFs {
     }
 }
 
-/// From: https://github.com/n0-computer/iroh-experiments/blob/4e052c6b34720e26683083270706926a84e49411/content-discovery/iroh-mainline-content-discovery/src/client.rs#L53
+/// From: <https://github.com/n0-computer/iroh-experiments/blob/4e052c6b34720e26683083270706926a84e49411/content-discovery/iroh-mainline-content-discovery/src/client.rs#L53>
 ///
 /// The mapping from an iroh [HashAndFormat] to a bittorrent infohash, aka [mainline::Id].
 ///

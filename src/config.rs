@@ -1,5 +1,5 @@
 use crate::fs::FS_PATH;
-use iroh::docs::NamespaceId;
+use iroh_docs::NamespaceId;
 use log::error;
 use miette::{miette, IntoDiagnostic};
 use serde::{Deserialize, Serialize};

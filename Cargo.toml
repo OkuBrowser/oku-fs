@@ -24,30 +24,34 @@ required-features = ["cli"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bytes = "1.8.0"
+bytes = "1.9.0"
 cfg-if = "1.0.0"
-chrono = "0.4.38"
-clap = { version = "4.5.20", features = ["derive"], optional = true }
+chrono = "0.4.39"
+clap = { version = "4.5.23", features = ["derive"], optional = true }
 fuse_mt = { version = "0.6.1", optional = true }
 fuser = { version = "0.13.0", optional = true }
 futures = "0.3.31"
-iroh = "0.28.1"
-libc = { version = "0.2.162", optional = true }
-mainline = { version = "3.0.0", features = ["async"] }
-miette = { version = "7.2.0", features = ["fancy"] }
+iroh = { version = "0.29.0", features = ["discovery-local-network"] }
+iroh-docs = "0.29.0"
+iroh-base = "0.29.0"
+iroh-blobs = "0.29.0"
+iroh-gossip = "0.29.0"
+libc = { version = "0.2.168", optional = true }
+mainline = { version = "4.1.0", features = ["async"] }
+miette = { version = "7.4.0", features = ["fancy"] }
 path-clean = "1.0.1"
-thiserror = "2.0.3"
-tokio = "1.41.1"
+thiserror = "2.0.6"
+tokio = "1.42.0"
 env_logger = { version = "0.11.5", optional = true }
 log = "0.4.22"
 bs58 = "0.5.1"
-anyhow = "1.0.93"
+anyhow = "1.0.94"
 native_db = "0.8.1"
 native_model = "0.4.20"
 serde = "1.0.215"
 toml = "0.8.19"
 rayon = "1.10.0"
-url = { version = "2.5.3", features = ["serde"] }
+url = { version = "2.5.4", features = ["serde"] }
 tantivy = "0.22.0"
 
 [features]

@@ -1,9 +1,10 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use env_logger::Builder;
-use iroh::base::ticket::Ticket;
-use iroh::docs::DocTicket;
-use iroh::{client::docs::ShareMode, docs::NamespaceId};
+use iroh_base::ticket::Ticket;
+use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::DocTicket;
+use iroh_docs::NamespaceId;
 use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::fs::OkuFs;
@@ -154,9 +155,9 @@ async fn main() -> miette::Result<()> {
     cfg_if::cfg_if! {
         if #[cfg(any(feature = "fuse"))] {
             let handle = Handle::current();
-            let node = OkuFs::start(&handle).await?;
+            let node = OkuFs::start(&handle).await.map_err(|e| miette::miette!("{}", e))?;
         } else {
-            let node = OkuFs::start().await?;
+            let node = OkuFs::start().await.map_err(|e| miette::miette!("{}", e))?;
         }
     };
 
@@ -207,7 +208,7 @@ async fn main() -> miette::Result<()> {
                 "Replicas: {:#?}",
                 replicas
                     .par_iter()
-                    .map(|replica| (replica.0.to_string(), replica.1))
+                    .map(|replica| (iroh_base::base32::fmt(replica.0), replica.1))
                     .collect::<Vec<_>>()
             );
         }
@@ -234,9 +235,9 @@ async fn main() -> miette::Result<()> {
             new_path,
         }) => {
             node.move_file(
-                old_replica_id.clone(),
+                old_replica_id,
                 old_path.clone(),
-                new_replica_id.clone(),
+                new_replica_id,
                 new_path.clone(),
             )
             .await?;
@@ -252,9 +253,9 @@ async fn main() -> miette::Result<()> {
             new_path,
         }) => {
             node.move_directory(
-                old_replica_id.clone(),
+                old_replica_id,
                 old_path.clone(),
-                new_replica_id.clone(),
+                new_replica_id,
                 new_path.clone(),
             )
             .await?;
@@ -274,7 +275,7 @@ async fn main() -> miette::Result<()> {
             replica_ticket,
             path,
         }) => {
-            node.fetch_replica_by_ticket(&replica_ticket.clone(), path.clone())
+            node.fetch_replica_by_ticket(&replica_ticket.clone(), path.clone(), None)
                 .await
                 .map_err(|e| miette!("{}", e))?;
             let files = node
@@ -292,7 +293,7 @@ async fn main() -> miette::Result<()> {
         None => {
             info!("Node will listen for incoming connections.");
             tokio::signal::ctrl_c().await.into_diagnostic()?;
-            node.shutdown().await?;
+            node.shutdown().await;
         }
     }
     Ok(())

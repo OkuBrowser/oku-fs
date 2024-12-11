@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use iroh::docs::DocTicket;
+use iroh_docs::DocTicket;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};

@@ -5,13 +5,14 @@ use crate::database::dht::ReplicaAnnouncement;
 use crate::error::{OkuDiscoveryError, OkuFsError, OkuFuseError};
 use anyhow::anyhow;
 use futures::{pin_mut, StreamExt};
-use iroh::base::node_addr::AddrInfoOptions;
-use iroh::base::ticket::Ticket;
-use iroh::client::docs::LiveEvent::SyncFinished;
-use iroh::client::Doc;
-use iroh::docs::store::FilterKind;
-use iroh::docs::{CapabilityKind, DocTicket};
-use iroh::{client::docs::ShareMode, docs::NamespaceId};
+use iroh_base::node_addr::AddrInfoOptions;
+use iroh_base::ticket::Ticket;
+use iroh_docs::engine::LiveEvent;
+use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::store::FilterKind;
+use iroh_docs::sync::CapabilityKind;
+use iroh_docs::DocTicket;
+use iroh_docs::NamespaceId;
 use log::{error, info};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
@@ -23,7 +24,7 @@ impl OkuFs {
     ///
     /// The ID of the new replica, being its public key.
     pub async fn create_replica(&self) -> miette::Result<NamespaceId> {
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let new_document = docs_client.create().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotCreateReplica
@@ -43,7 +44,7 @@ impl OkuFs {
     ///
     /// * `namespace_id` - The ID of the replica to delete.
     pub async fn delete_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         self.replica_sender.send_replace(());
         Ok(docs_client.drop_doc(namespace_id).await.map_err(|e| {
             error!("{}", e);
@@ -57,7 +58,7 @@ impl OkuFs {
     ///
     /// A list of all replicas in the file system.
     pub async fn list_replicas(&self) -> miette::Result<Vec<(NamespaceId, CapabilityKind)>> {
-        let docs_client = &self.node.docs();
+        let docs_client = &self.docs_engine.client();
         let replicas = docs_client.list().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotListReplicas
@@ -101,7 +102,7 @@ impl OkuFs {
             .find_any(|replica| replica.0 == namespace_id)
         {
             Some(replica) => Ok(replica.1),
-            None => Err(OkuFuseError::NoReplica(namespace_id.to_string()).into()),
+            None => Err(OkuFuseError::NoReplica(iroh_base::base32::fmt(namespace_id)).into()),
         }
     }
 
@@ -118,14 +119,14 @@ impl OkuFs {
         path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
-        let docs_client = self.node.docs();
+        let docs_client = self.docs_engine.client();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
             Some(path) => {
                 let replica = docs_client.import_namespace(ticket.capability).await?;
                 let filter = FilterKind::Prefix(path_to_entry_prefix(path));
                 replica
-                    .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
+                    .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(vec![
                         filter,
                     ]))
                     .await?;
@@ -133,11 +134,11 @@ impl OkuFs {
                 let mut events = replica.subscribe().await?;
                 let sync_start = std::time::Instant::now();
                 while let Some(event) = events.next().await {
-                    if matches!(event?, SyncFinished { .. }) {
+                    if matches!(event?, LiveEvent::SyncFinished(_)) {
                         let elapsed = sync_start.elapsed();
                         info!(
                             "Synchronisation took {elapsed:?} for {} … ",
-                            namespace_id.to_string(),
+                            iroh_base::base32::fmt(namespace_id),
                         );
                         break;
                     }
@@ -146,17 +147,17 @@ impl OkuFs {
             None => {
                 if let Some(replica) = docs_client.open(namespace_id).await.unwrap_or(None) {
                     replica
-                        .set_download_policy(iroh::docs::store::DownloadPolicy::default())
+                        .set_download_policy(iroh_docs::store::DownloadPolicy::default())
                         .await?;
                     replica.start_sync(ticket.nodes).await?;
                     let mut events = replica.subscribe().await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
-                        if matches!(event?, SyncFinished { .. }) {
+                        if matches!(event?, LiveEvent::SyncFinished(_)) {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                namespace_id.to_string(),
+                                iroh_base::base32::fmt(namespace_id),
                             );
                             break;
                         }
@@ -165,11 +166,11 @@ impl OkuFs {
                     let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
-                        if matches!(event?, SyncFinished { .. }) {
+                        if matches!(event?, LiveEvent::SyncFinished(_)) {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                namespace_id.to_string(),
+                                iroh_base::base32::fmt(namespace_id),
                             );
                             break;
                         }
@@ -196,75 +197,72 @@ impl OkuFs {
         &self,
         ticket: &DocTicket,
         path: Option<PathBuf>,
-    ) -> anyhow::Result<Doc> {
+        filters: Option<Vec<FilterKind>>,
+    ) -> anyhow::Result<()> {
         let namespace_id = ticket.capability.id();
-        let docs_client = self.node.docs();
+        let docs_client = self.docs_engine.client();
         let replica_sender = self.replica_sender.clone();
-        let replica = match path.clone() {
+        match path.clone() {
             Some(path) => {
                 let replica = docs_client
                     .import_namespace(ticket.capability.clone())
                     .await?;
-                let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+                let filters =
+                    filters.unwrap_or(vec![FilterKind::Prefix(path_to_entry_prefix(path))]);
                 replica
-                    .set_download_policy(iroh::docs::store::DownloadPolicy::NothingExcept(vec![
-                        filter,
-                    ]))
+                    .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(filters))
                     .await?;
                 replica.start_sync(ticket.nodes.clone()).await?;
                 let mut events = replica.subscribe().await?;
                 let sync_start = std::time::Instant::now();
                 while let Some(event) = events.next().await {
-                    if matches!(event?, SyncFinished { .. }) {
+                    if matches!(event?, LiveEvent::SyncFinished(_)) {
                         let elapsed = sync_start.elapsed();
                         info!(
                             "Synchronisation took {elapsed:?} for {} … ",
-                            namespace_id.to_string(),
+                            iroh_base::base32::fmt(namespace_id),
                         );
                         break;
                     }
                 }
-                replica
             }
             None => {
                 if let Some(replica) = docs_client.open(namespace_id).await.unwrap_or(None) {
                     replica
-                        .set_download_policy(iroh::docs::store::DownloadPolicy::default())
+                        .set_download_policy(iroh_docs::store::DownloadPolicy::default())
                         .await?;
                     replica.start_sync(ticket.nodes.clone()).await?;
                     let mut events = replica.subscribe().await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
-                        if matches!(event?, SyncFinished { .. }) {
+                        if matches!(event?, LiveEvent::SyncFinished(_)) {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                namespace_id.to_string(),
+                                iroh_base::base32::fmt(namespace_id),
                             );
                             break;
                         }
                     }
-                    replica
                 } else {
-                    let (replica, mut events) =
+                    let (_replica, mut events) =
                         docs_client.import_and_subscribe(ticket.clone()).await?;
                     let sync_start = std::time::Instant::now();
                     while let Some(event) = events.next().await {
-                        if matches!(event?, SyncFinished { .. }) {
+                        if matches!(event?, LiveEvent::SyncFinished(_)) {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                namespace_id.to_string(),
+                                iroh_base::base32::fmt(namespace_id),
                             );
                             break;
                         }
                     }
-                    replica
                 }
             }
         };
         replica_sender.send_replace(());
-        Ok(replica)
+        Ok(())
     }
 
     /// Join a swarm to fetch the latest version of a replica and save it to the local machine.
@@ -276,16 +274,16 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to fetch.
     pub async fn sync_replica(&self, namespace_id: NamespaceId) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
-        let docs_client = self.node.docs();
+        let docs_client = self.docs_engine.client();
         let replica_sender = self.replica_sender.clone();
         let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
         let sync_start = std::time::Instant::now();
         while let Some(event) = events.next().await {
-            if matches!(event?, SyncFinished { .. }) {
+            if matches!(event?, LiveEvent::SyncFinished(_)) {
                 let elapsed = sync_start.elapsed();
                 info!(
                     "Synchronisation took {elapsed:?} for {} … ",
-                    namespace_id.to_string(),
+                    iroh_base::base32::fmt(namespace_id),
                 );
                 break;
             }
@@ -319,7 +317,7 @@ impl OkuFs {
         }
         merge_tickets(tickets).ok_or(anyhow!(
             "Could not find tickets for {} … ",
-            namespace_id.to_string()
+            iroh_base::base32::fmt(namespace_id)
         ))
     }
 
@@ -347,7 +345,7 @@ impl OkuFs {
         {
             Err(OkuFsError::CannotShareReplicaWritable(namespace_id).into())
         } else {
-            let docs_client = &self.node.docs();
+            let docs_client = &self.docs_engine.client();
             let document = docs_client
                 .open(namespace_id)
                 .await

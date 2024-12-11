@@ -1,4 +1,4 @@
-use iroh::docs::NamespaceId;
+use iroh_docs::NamespaceId;
 use miette::Diagnostic;
 use std::path::PathBuf;
 use thiserror::Error;

@@ -1,6 +1,7 @@
 use super::core::*;
 use super::posts::*;
-use iroh::{client::docs::Entry, docs::AuthorId};
+use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::AuthorId;
 use log::error;
 use miette::IntoDiagnostic;
 use native_db::*;
