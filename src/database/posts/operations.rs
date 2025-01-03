@@ -25,8 +25,8 @@ impl OkuDatabase {
     ///
     /// A list of OkuNet posts.
     pub fn search_posts(
-        query_string: String,
-        result_limit: Option<usize>,
+        query_string: &str,
+        result_limit: &Option<usize>,
     ) -> miette::Result<Vec<OkuPost>> {
         let searcher = POST_INDEX_READER.searcher();
         let query_parser = QueryParser::for_index(
@@ -39,7 +39,7 @@ impl OkuDatabase {
                 POST_SCHEMA.1["tag"],
             ],
         );
-        let query = query_parser.parse_query(&query_string).into_diagnostic()?;
+        let query = query_parser.parse_query(query_string).into_diagnostic()?;
         let limit = result_limit.unwrap_or(10);
         let top_docs = searcher
             .search(&query, &TopDocs::with_limit(limit))
@@ -62,7 +62,7 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// The previous version of the post, if one existed.
-    pub fn upsert_post(&self, post: OkuPost) -> miette::Result<Option<OkuPost>> {
+    pub fn upsert_post(&self, post: &OkuPost) -> miette::Result<Option<OkuPost>> {
         let rw: transaction::RwTransaction<'_> =
             self.database.rw_transaction().into_diagnostic()?;
         let old_value: Option<OkuPost> = rw.upsert(post.clone()).into_diagnostic()?;
@@ -75,7 +75,9 @@ impl OkuDatabase {
         if let Some(old_post) = old_value.clone() {
             index_writer.delete_term(old_post.index_term());
         }
-        index_writer.add_document(post.into()).into_diagnostic()?;
+        index_writer
+            .add_document(post.to_owned().into())
+            .into_diagnostic()?;
         index_writer.commit().into_diagnostic()?;
 
         Ok(old_value)
@@ -90,7 +92,7 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list containing the previous version of each post, if one existed.
-    pub fn upsert_posts(&self, posts: Vec<OkuPost>) -> miette::Result<Vec<Option<OkuPost>>> {
+    pub fn upsert_posts(&self, posts: &Vec<OkuPost>) -> miette::Result<Vec<Option<OkuPost>>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let old_posts: Vec<_> = posts
             .clone()
@@ -125,9 +127,9 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// The deleted post.
-    pub fn delete_post(&self, post: OkuPost) -> miette::Result<OkuPost> {
+    pub fn delete_post(&self, post: &OkuPost) -> miette::Result<OkuPost> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
-        let removed_post = rw.remove(post).into_diagnostic()?;
+        let removed_post = rw.remove(post.to_owned()).into_diagnostic()?;
         rw.commit().into_diagnostic()?;
 
         let mut index_writer = POST_INDEX_WRITER
@@ -149,11 +151,11 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list containing the deleted posts.
-    pub fn delete_posts(&self, posts: Vec<OkuPost>) -> miette::Result<Vec<OkuPost>> {
+    pub fn delete_posts(&self, posts: &[OkuPost]) -> miette::Result<Vec<OkuPost>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let removed_posts: Vec<_> = posts
-            .into_iter()
-            .filter_map(|post| rw.remove(post).ok())
+            .iter()
+            .filter_map(|post| rw.remove(post.to_owned()).ok())
             .collect();
         rw.commit().into_diagnostic()?;
 
@@ -194,11 +196,11 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list of all known OkuNet posts by the given author.
-    pub fn get_posts_by_author(&self, author_id: AuthorId) -> miette::Result<Vec<OkuPost>> {
+    pub fn get_posts_by_author(&self, author_id: &AuthorId) -> miette::Result<Vec<OkuPost>> {
         Ok(self
             .get_posts()?
             .into_par_iter()
-            .filter(|x| x.entry.author() == author_id)
+            .filter(|x| x.entry.author() == *author_id)
             .collect())
     }
 
@@ -211,11 +213,11 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list of all known OkuNet posts with the given tag.
-    pub fn get_posts_by_tag(&self, tag: String) -> miette::Result<Vec<OkuPost>> {
+    pub fn get_posts_by_tag(&self, tag: &String) -> miette::Result<Vec<OkuPost>> {
         Ok(self
             .get_posts()?
             .into_par_iter()
-            .filter(|x| x.note.tags.contains(&tag))
+            .filter(|x| x.note.tags.contains(tag))
             .collect())
     }
 
@@ -243,7 +245,11 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// The OkuNet post by the given author at the given path, if one exists.
-    pub fn get_post(&self, author_id: AuthorId, path: PathBuf) -> miette::Result<Option<OkuPost>> {
+    pub fn get_post(
+        &self,
+        author_id: &AuthorId,
+        path: &PathBuf,
+    ) -> miette::Result<Option<OkuPost>> {
         let r = self.database.r_transaction().into_diagnostic()?;
         let entry_key = (
             author_id.as_bytes().to_vec(),

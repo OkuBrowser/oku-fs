@@ -31,7 +31,7 @@ pub enum EmbeddingModality {
 ///
 /// The download filters specifying the only content allowed to be downloaded from a home replica.
 pub fn home_replica_filters() -> Vec<FilterKind> {
-    let profile_filter = FilterKind::Exact(path_to_entry_key("/profile.toml".into()));
-    let posts_filter = FilterKind::Prefix(path_to_entry_prefix("/posts/".into()));
+    let profile_filter = FilterKind::Exact(path_to_entry_key(&"/profile.toml".into()));
+    let posts_filter = FilterKind::Prefix(path_to_entry_prefix(&"/posts/".into()));
     vec![profile_filter, posts_filter]
 }

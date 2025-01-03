@@ -187,19 +187,20 @@ async fn main() -> miette::Result<()> {
             path,
             data,
         }) => {
-            node.create_or_modify_file(replica_id, path.clone(), data)
-                .await?;
+            node.create_or_modify_file(&replica_id, &path, data).await?;
             info!("Created file at {:?}", path);
         }
         Some(Commands::ListFiles { replica_id, path }) => {
-            let files = node.list_files(replica_id, path).await?;
+            let files = node.list_files(&replica_id, &path).await?;
             println!("Files: {:#?}", files);
         }
         Some(Commands::Share {
             replica_id,
             share_mode,
         }) => {
-            let ticket = node.create_document_ticket(replica_id, share_mode).await?;
+            let ticket = node
+                .create_document_ticket(&replica_id, &share_mode)
+                .await?;
             println!("{}", ticket.serialize());
         }
         Some(Commands::ListReplicas) => {
@@ -213,19 +214,19 @@ async fn main() -> miette::Result<()> {
             );
         }
         Some(Commands::GetFile { replica_id, path }) => {
-            let data = node.read_file(replica_id, path).await?;
+            let data = node.read_file(&replica_id, &path).await?;
             println!("{}", String::from_utf8_lossy(&data));
         }
         Some(Commands::RemoveFile { replica_id, path }) => {
-            node.delete_file(replica_id, path.clone()).await?;
+            node.delete_file(&replica_id, &path).await?;
             info!("Removed file at {:?}", path);
         }
         Some(Commands::RemoveDirectory { replica_id, path }) => {
-            node.delete_directory(replica_id, path.clone()).await?;
+            node.delete_directory(&replica_id, &path).await?;
             info!("Removed directory at {:?}", path);
         }
         Some(Commands::RemoveReplica { replica_id }) => {
-            node.delete_replica(replica_id).await?;
+            node.delete_replica(&replica_id).await?;
             info!("Removed replica with ID: {}", replica_id);
         }
         Some(Commands::MoveFile {
@@ -234,13 +235,8 @@ async fn main() -> miette::Result<()> {
             new_replica_id,
             new_path,
         }) => {
-            node.move_file(
-                old_replica_id,
-                old_path.clone(),
-                new_replica_id,
-                new_path.clone(),
-            )
-            .await?;
+            node.move_file(&old_replica_id, &old_path, &new_replica_id, &new_path)
+                .await?;
             info!(
                 "Moved file from {:?} in {} to {:?} in {}",
                 old_path, old_replica_id, new_path, new_replica_id
@@ -252,34 +248,29 @@ async fn main() -> miette::Result<()> {
             new_replica_id,
             new_path,
         }) => {
-            node.move_directory(
-                old_replica_id,
-                old_path.clone(),
-                new_replica_id,
-                new_path.clone(),
-            )
-            .await?;
+            node.move_directory(&old_replica_id, &old_path, &new_replica_id, &new_path)
+                .await?;
             info!(
                 "Moved directory from {:?} in {} to {:?} in {}",
                 old_path, old_replica_id, new_path, new_replica_id
             );
         }
         Some(Commands::GetReplicaById { replica_id, path }) => {
-            node.fetch_replica_by_id(replica_id, path.clone())
+            node.fetch_replica_by_id(&replica_id, &path)
                 .await
                 .map_err(|e| miette!("{}", e))?;
-            let files = node.list_files(replica_id, path).await?;
+            let files = node.list_files(&replica_id, &path).await?;
             println!("Files: {:#?}", files);
         }
         Some(Commands::GetReplicaByTicket {
             replica_ticket,
             path,
         }) => {
-            node.fetch_replica_by_ticket(&replica_ticket.clone(), path.clone(), None)
+            node.fetch_replica_by_ticket(&replica_ticket, &path, &None)
                 .await
                 .map_err(|e| miette!("{}", e))?;
             let files = node
-                .list_files(replica_ticket.capability.id(), path)
+                .list_files(&replica_ticket.capability.id(), &path)
                 .await?;
             println!("Files: {:#?}", files);
         }

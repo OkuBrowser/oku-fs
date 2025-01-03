@@ -69,9 +69,9 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// The previous version of the user, if one existed.
-    pub fn upsert_user(&self, user: OkuUser) -> miette::Result<Option<OkuUser>> {
+    pub fn upsert_user(&self, user: &OkuUser) -> miette::Result<Option<OkuUser>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
-        let old_value: Option<OkuUser> = rw.upsert(user).into_diagnostic()?;
+        let old_value: Option<OkuUser> = rw.upsert(user.to_owned()).into_diagnostic()?;
         rw.commit().into_diagnostic()?;
         Ok(old_value)
     }
@@ -85,9 +85,9 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// The deleted user.
-    pub fn delete_user(&self, user: OkuUser) -> miette::Result<OkuUser> {
+    pub fn delete_user(&self, user: &OkuUser) -> miette::Result<OkuUser> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
-        let removed_user = rw.remove(user).into_diagnostic()?;
+        let removed_user = rw.remove(user.to_owned()).into_diagnostic()?;
         rw.commit().into_diagnostic()?;
         Ok(removed_user)
     }
@@ -101,11 +101,11 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list containing the deleted users.
-    pub fn delete_users(&self, users: Vec<OkuUser>) -> miette::Result<Vec<OkuUser>> {
+    pub fn delete_users(&self, users: &[OkuUser]) -> miette::Result<Vec<OkuUser>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let removed_users = users
-            .into_iter()
-            .filter_map(|user| rw.remove(user).ok())
+            .iter()
+            .filter_map(|user| rw.remove(user.to_owned()).ok())
             .collect();
         rw.commit().into_diagnostic()?;
         Ok(removed_users)
@@ -120,14 +120,14 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A list containing the deleted posts.
-    pub fn delete_users_with_posts(&self, users: Vec<OkuUser>) -> miette::Result<Vec<OkuPost>> {
+    pub fn delete_users_with_posts(&self, users: &[OkuUser]) -> miette::Result<Vec<OkuPost>> {
         Ok(self
             .delete_users(users)?
             .par_iter()
-            .filter_map(|x| self.get_posts_by_author(x.author_id).ok())
+            .filter_map(|x| self.get_posts_by_author(&x.author_id).ok())
             .collect::<Vec<_>>()
             .into_par_iter()
-            .flat_map(|x| self.delete_posts(x).ok())
+            .flat_map(|x| self.delete_posts(&x).ok())
             .collect::<Vec<_>>()
             .concat())
     }
@@ -139,20 +139,20 @@ impl OkuDatabase {
     /// # Arguments
     ///
     /// * `author_ids` - A list of content authorship IDs.
-    pub fn delete_by_author_ids(&self, author_ids: Vec<AuthorId>) -> miette::Result<()> {
+    pub fn delete_by_author_ids(&self, author_ids: &Vec<AuthorId>) -> miette::Result<()> {
         let users: Vec<_> = author_ids
             .par_iter()
-            .filter_map(|x| self.get_user(*x).ok().flatten())
+            .filter_map(|x| self.get_user(x).ok().flatten())
             .collect();
         let posts: Vec<_> = author_ids
             .into_par_iter()
             .filter_map(|x| self.get_posts_by_author(x).ok())
             .flatten()
             .collect();
-        if let Err(e) = self.delete_users(users) {
+        if let Err(e) = self.delete_users(&users) {
             error!("{}", e);
         }
-        if let Err(e) = self.delete_posts(posts) {
+        if let Err(e) = self.delete_posts(&posts) {
             error!("{}", e);
         }
         Ok(())
@@ -209,7 +209,7 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// An OkuNet user's content.
-    pub fn get_user(&self, author_id: AuthorId) -> miette::Result<Option<OkuUser>> {
+    pub fn get_user(&self, author_id: &AuthorId) -> miette::Result<Option<OkuUser>> {
         let r = self.database.r_transaction().into_diagnostic()?;
         r.get()
             .primary(author_id.as_bytes().to_vec())

@@ -30,12 +30,12 @@ impl OkuFs {
     /// A list of files in the replica.
     pub async fn list_files(
         &self,
-        namespace_id: NamespaceId,
-        path: Option<PathBuf>,
+        namespace_id: &NamespaceId,
+        path: &Option<PathBuf>,
     ) -> miette::Result<Vec<Entry>> {
         let docs_client = &self.docs_engine.client();
         let document = docs_client
-            .open(namespace_id)
+            .open(*namespace_id)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -74,15 +74,14 @@ impl OkuFs {
     /// The hash of the file.
     pub async fn create_or_modify_file(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
         data: impl Into<Bytes>,
     ) -> miette::Result<Hash> {
         let file_key = path_to_entry_key(path);
-        let data_bytes = data.into();
         let docs_client = &self.docs_engine.client();
         let document = docs_client
-            .open(namespace_id)
+            .open(*namespace_id)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -90,7 +89,7 @@ impl OkuFs {
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
-            .set_bytes(self.default_author(), file_key, data_bytes)
+            .set_bytes(self.default_author(), file_key, data)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -113,13 +112,13 @@ impl OkuFs {
     /// The number of entries deleted in the replica, which should be 1 if the file was successfully deleted.
     pub async fn delete_file(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
     ) -> miette::Result<usize> {
         let file_key = path_to_entry_key(path);
         let docs_client = &self.docs_engine.client();
         let document = docs_client
-            .open(namespace_id)
+            .open(*namespace_id)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -160,13 +159,13 @@ impl OkuFs {
     /// The entry representing the file.
     pub async fn get_entry(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
     ) -> miette::Result<Entry> {
         let file_key = path_to_entry_key(path);
         let docs_client = &self.docs_engine.client();
         let document = docs_client
-            .open(namespace_id)
+            .open(*namespace_id)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -200,13 +199,13 @@ impl OkuFs {
     /// The timestamp, in microseconds from the Unix epoch, of the oldest entry in the file.
     pub async fn get_oldest_entry_timestamp(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
     ) -> miette::Result<u64> {
         let file_key = path_to_entry_key(path);
         let docs_client = &self.docs_engine.client();
         let document = docs_client
-            .open(namespace_id)
+            .open(*namespace_id)
             .await
             .map_err(|e| {
                 error!("{}", e);
@@ -239,8 +238,8 @@ impl OkuFs {
     /// The data read from the file.
     pub async fn read_file(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
     ) -> miette::Result<Bytes> {
         let entry = self.get_entry(namespace_id, path).await?;
         Ok(self.content_bytes(&entry).await.map_err(|e| {
@@ -262,8 +261,8 @@ impl OkuFs {
     /// The data read from the file.
     pub async fn read_file_from_replica_handle(
         &self,
-        document: Doc,
-        path: PathBuf,
+        document: &Doc,
+        path: &PathBuf,
     ) -> miette::Result<Bytes> {
         let file_key = path_to_entry_key(path);
         let query = iroh_docs::store::Query::single_latest_per_key()
@@ -296,14 +295,14 @@ impl OkuFs {
     /// A tuple containing the hash of the file at the new destination and the number of replica entries deleted during the operation, which should be 1 if the file at the original path was deleted.
     pub async fn move_file(
         &self,
-        from_namespace_id: NamespaceId,
-        from_path: PathBuf,
-        to_namespace_id: NamespaceId,
-        to_path: PathBuf,
+        from_namespace_id: &NamespaceId,
+        from_path: &PathBuf,
+        to_namespace_id: &NamespaceId,
+        to_path: &PathBuf,
     ) -> miette::Result<(Hash, usize)> {
-        let data = self.read_file(from_namespace_id, from_path.clone()).await?;
+        let data = self.read_file(from_namespace_id, from_path).await?;
         let hash = self
-            .create_or_modify_file(to_namespace_id, to_path.clone(), data)
+            .create_or_modify_file(to_namespace_id, to_path, data)
             .await?;
         let entries_deleted = self.delete_file(from_namespace_id, from_path).await?;
         Ok((hash, entries_deleted))
@@ -322,15 +321,12 @@ impl OkuFs {
     /// The data read from the file.
     pub async fn fetch_file(
         &self,
-        namespace_id: NamespaceId,
-        path: PathBuf,
-        filters: Option<Vec<FilterKind>>,
+        namespace_id: &NamespaceId,
+        path: &PathBuf,
+        filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
         match self.resolve_namespace_id(namespace_id).await {
-            Ok(ticket) => match self
-                .fetch_file_with_ticket(&ticket, path.clone(), filters)
-                .await
-            {
+            Ok(ticket) => match self.fetch_file_with_ticket(&ticket, path, filters).await {
                 Ok(bytes) => Ok(bytes),
                 Err(e) => {
                     error!("{}", e);
@@ -364,14 +360,16 @@ impl OkuFs {
     pub async fn fetch_file_with_ticket(
         &self,
         ticket: &DocTicket,
-        path: PathBuf,
-        filters: Option<Vec<FilterKind>>,
+        path: &PathBuf,
+        filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
         let docs_client = &self.docs_engine.client();
         let replica = docs_client
             .import_namespace(ticket.capability.clone())
             .await?;
-        let filters = filters.unwrap_or(vec![FilterKind::Exact(path_to_entry_key(path.clone()))]);
+        let filters = filters
+            .clone()
+            .unwrap_or(vec![FilterKind::Exact(path_to_entry_key(path))]);
         replica
             .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(filters))
             .await?;
@@ -389,7 +387,7 @@ impl OkuFs {
                 break;
             }
         }
-        self.read_file(namespace_id, path)
+        self.read_file(&namespace_id, path)
             .await
             .map_err(|e| anyhow!("{}", e))
     }

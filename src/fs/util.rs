@@ -6,7 +6,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use std::ffi::CString;
 use std::path::PathBuf;
 
-pub(super) fn normalise_path(path: PathBuf) -> PathBuf {
+pub(super) fn normalise_path(path: &PathBuf) -> PathBuf {
     PathBuf::from("/").join(path).clean()
 }
 
@@ -19,8 +19,8 @@ pub(super) fn normalise_path(path: PathBuf) -> PathBuf {
 /// # Returns
 ///
 /// A null-terminated byte string representing the path.
-pub fn path_to_entry_key(path: PathBuf) -> Bytes {
-    let path = normalise_path(path.clone());
+pub fn path_to_entry_key(path: &PathBuf) -> Bytes {
+    let path = normalise_path(path);
     let mut path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.push(b'\0');
     path_bytes.into()
@@ -53,8 +53,8 @@ pub fn entry_key_to_path(key: &[u8]) -> miette::Result<PathBuf> {
 /// # Returns
 ///
 /// A byte string representing the path, without a null byte at the end.
-pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
-    let path = normalise_path(path.clone());
+pub fn path_to_entry_prefix(path: &PathBuf) -> Bytes {
+    let path = normalise_path(path);
     let path_bytes = path.into_os_string().into_encoded_bytes();
     path_bytes.into()
 }
@@ -68,7 +68,7 @@ pub fn path_to_entry_prefix(path: PathBuf) -> Bytes {
 /// # Returns
 ///
 /// `None` if no tickets were given, or a ticket with a merged capability and merged list of nodes.
-pub fn merge_tickets(tickets: Vec<DocTicket>) -> Option<DocTicket> {
+pub fn merge_tickets(tickets: &Vec<DocTicket>) -> Option<DocTicket> {
     let ticket_parts: Vec<_> = tickets
         .par_iter()
         .map(|ticket| ticket.capability.clone())

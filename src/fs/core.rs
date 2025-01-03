@@ -182,7 +182,7 @@ impl OkuFs {
         let mut timestamps: Vec<u64> = Vec::new();
         for (replica, _capability_kind) in replicas {
             timestamps.push(
-                self.get_oldest_timestamp_in_folder(replica, PathBuf::from("/"))
+                self.get_oldest_timestamp_in_folder(&replica, &PathBuf::from("/"))
                     .await?,
             );
         }
@@ -199,7 +199,7 @@ impl OkuFs {
         let mut timestamps: Vec<u64> = Vec::new();
         for (replica, _capability_kind) in replicas {
             timestamps.push(
-                self.get_newest_timestamp_in_folder(replica, PathBuf::from("/"))
+                self.get_newest_timestamp_in_folder(&replica, &PathBuf::from("/"))
                     .await?,
             );
         }
@@ -215,7 +215,7 @@ impl OkuFs {
         let replicas = self.list_replicas().await?;
         let mut size = 0;
         for (replica, _capability_kind) in replicas {
-            size += self.get_folder_size(replica, PathBuf::from("/")).await?;
+            size += self.get_folder_size(&replica, &PathBuf::from("/")).await?;
         }
         Ok(size)
     }

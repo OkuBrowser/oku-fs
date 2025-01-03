@@ -197,10 +197,7 @@ impl OkuFs {
     pub async fn is_file_or_directory(&self, path: &Path) -> miette::Result<fuse_mt::FileType> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
-            if self
-                .get_entry(namespace_id, replica_path.clone())
-                .await
-                .is_ok()
+            if self.get_entry(&namespace_id, &replica_path).await.is_ok()
                 && replica_path != PathBuf::from("/")
             {
                 Ok(fuse_mt::FileType::RegularFile)
@@ -215,7 +212,10 @@ impl OkuFs {
                             match parse_fuse_path(&parent_path_buf.clone())? {
                                 Some((namespace_id, parsed_parent_path)) => {
                                     let parent_children = self
-                                        .list_files(namespace_id, Some(parsed_parent_path.clone()))
+                                        .list_files(
+                                            &namespace_id,
+                                            &Some(parsed_parent_path.clone()),
+                                        )
                                         .await?;
                                     let parent_immediate_children = get_immediate_children(
                                         parsed_parent_path.clone(),
@@ -258,17 +258,17 @@ impl OkuFs {
     pub async fn get_fs_entry_attributes(&self, path: &Path) -> miette::Result<FileAttr> {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
-            let fs_entry_permission = match self.get_replica_capability(namespace_id).await? {
+            let fs_entry_permission = match self.get_replica_capability(&namespace_id).await? {
                 iroh_docs::CapabilityKind::Read => 0o444u16,
                 iroh_docs::CapabilityKind::Write => 0o777u16,
             };
             let fs_entry_type = self.is_file_or_directory(path).await?;
             match fs_entry_type {
                 fuse_mt::FileType::RegularFile => {
-                    let file_entry = self.get_entry(namespace_id, replica_path.clone()).await?;
+                    let file_entry = self.get_entry(&namespace_id, &replica_path).await?;
                     let estimated_creation_time = SystemTime::from(
                         chrono::Utc.timestamp_nanos(
-                            self.get_oldest_entry_timestamp(namespace_id, replica_path)
+                            self.get_oldest_entry_timestamp(&namespace_id, &replica_path)
                                 .await? as i64,
                         ),
                     );
@@ -292,14 +292,13 @@ impl OkuFs {
                 }
                 fuse_mt::FileType::Directory => {
                     let directory_creation_time_estimate = self
-                        .get_oldest_timestamp_in_folder(namespace_id, replica_path.clone())
+                        .get_oldest_timestamp_in_folder(&namespace_id, &replica_path)
                         .await?;
                     let directory_modification_time_estimate = self
-                        .get_newest_timestamp_in_folder(namespace_id, replica_path.clone())
+                        .get_newest_timestamp_in_folder(&namespace_id, &replica_path)
                         .await?;
-                    let directory_size_estimate = self
-                        .get_folder_size(namespace_id, replica_path.clone())
-                        .await?;
+                    let directory_size_estimate =
+                        self.get_folder_size(&namespace_id, &replica_path).await?;
                     Ok(FileAttr {
                         size: directory_size_estimate,
                         blocks: 0,
@@ -433,7 +432,7 @@ impl FilesystemMT for OkuFs {
                     // Potential improvement: spawn a new thread to block on.
                     let bytes_result = self
                         .handle
-                        .block_on(async { self.read_file(namespace_id, replica_path).await });
+                        .block_on(async { self.read_file(&namespace_id, &replica_path).await });
                     match bytes_result {
                         Ok(bytes) => {
                             if offset > bytes.len() as u64 {
@@ -535,7 +534,7 @@ impl FilesystemMT for OkuFs {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => {
                     let files_result = self.handle.block_on(async {
-                        self.list_files(namespace_id, Some(replica_path.clone()))
+                        self.list_files(&namespace_id, &Some(replica_path.clone()))
                             .await
                     });
                     match files_result {
@@ -604,7 +603,7 @@ impl FilesystemMT for OkuFs {
             let mut file_count = 0u64;
             if let Ok(replicas) = self.list_replicas().await {
                 for (replica, _capability_kind) in replicas {
-                    if let Ok(files) = self.list_files(replica, None).await {
+                    if let Ok(files) = self.list_files(&replica, &None).await {
                         file_count += files.len().try_into().unwrap_or(0);
                     }
                 }
@@ -635,7 +634,7 @@ impl FilesystemMT for OkuFs {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
                     if replica_path == PathBuf::from("/") {
-                        match self.delete_replica(namespace_id).await {
+                        match self.delete_replica(&namespace_id).await {
                             Ok(_) => {
                                 info!("Replica {} deleted", namespace_id);
                                 Ok(())
@@ -646,7 +645,7 @@ impl FilesystemMT for OkuFs {
                             }
                         }
                     } else {
-                        match self.delete_directory(namespace_id, replica_path).await {
+                        match self.delete_directory(&namespace_id, &replica_path).await {
                             Ok(entries_deleted) => {
                                 info!("{} entries deleted in {:?}", entries_deleted, path);
                                 Ok(())
@@ -686,7 +685,7 @@ impl FilesystemMT for OkuFs {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
                     match self
-                        .create_or_modify_file(namespace_id, replica_path, b"\0".to_vec())
+                        .create_or_modify_file(&namespace_id, &replica_path, b"\0".as_slice())
                         .await
                     {
                         Ok(file_hash) => {
@@ -754,7 +753,7 @@ impl FilesystemMT for OkuFs {
                                                 Some((new_namespace_id, new_replica_path)) => {
                                                     match fs_entry_type {
                                                         fuser::FileType::RegularFile => {
-                                                            match self.move_file(old_namespace_id, old_replica_path, new_namespace_id, new_replica_path).await {
+                                                            match self.move_file(&old_namespace_id, &old_replica_path, &new_namespace_id, &new_replica_path).await {
                                                                 Ok(file_move_info) => {
                                                                     info!("File with hash {} moved from {:?} to {:?} ({} entries deleted)", file_move_info.0, old_path, new_path, file_move_info.1);
                                                                     Ok(())
@@ -766,7 +765,7 @@ impl FilesystemMT for OkuFs {
                                                             }
                                                         },
                                                         fuser::FileType::Directory => {
-                                                            match self.move_directory(old_namespace_id, old_replica_path, new_namespace_id, new_replica_path).await {
+                                                            match self.move_directory(&old_namespace_id, &old_replica_path, &new_namespace_id, &new_replica_path).await {
                                                                 Ok(directory_move_info) => {
                                                                     info!("Directory moved from {:?} to {:?} ({} entries deleted, new file hashes: {:#?})", old_path, new_path, directory_move_info.1, directory_move_info.0);
                                                                     Ok(())
@@ -853,7 +852,7 @@ impl FilesystemMT for OkuFs {
         match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
-                    match self.read_file(namespace_id, replica_path.clone()).await {
+                    match self.read_file(&namespace_id, &replica_path).await {
                         Ok(file_bytes) => {
                             let mut writer = BufWriter::new(Cursor::new(file_bytes.to_vec()));
                             match writer.seek(std::io::SeekFrom::Start(offset)) {
@@ -862,8 +861,8 @@ impl FilesystemMT for OkuFs {
                                         Ok(inner_cursor) => {
                                             match self
                                                 .create_or_modify_file(
-                                                    namespace_id,
-                                                    replica_path,
+                                                    &namespace_id,
+                                                    &replica_path,
                                                     inner_cursor.into_inner(),
                                                 )
                                                 .await
@@ -946,7 +945,7 @@ impl FilesystemMT for OkuFs {
         match parse_fuse_path(path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
-                    match self.read_file(namespace_id, replica_path).await {
+                    match self.read_file(&namespace_id, &replica_path).await {
                         Ok(file_bytes) => match file_bytes.try_into_mut() {
                             Ok(mut file_bytes_mut) => {
                                 file_bytes_mut.resize(size.try_into().unwrap_or(usize::MIN), 0);
@@ -1037,7 +1036,7 @@ impl FilesystemMT for OkuFs {
         match parse_fuse_path(&path) {
             Ok(parsed_path) => match parsed_path {
                 Some((namespace_id, replica_path)) => self.handle.block_on(async {
-                    match self.delete_file(namespace_id, replica_path).await {
+                    match self.delete_file(&namespace_id, &replica_path).await {
                         Ok(entries_deleted) => {
                             info!(
                                 "File {:?} deleted ({} entries removed)",
@@ -1182,9 +1181,9 @@ impl FilesystemMT for OkuFs {
                         // Folders must have a single entry (ie, must have at least one file); a hidden file (`.folder`) is necessary
                         match self
                             .create_or_modify_file(
-                                namespace_id,
-                                replica_path.join(".folder"),
-                                b"\0".to_vec(),
+                                &namespace_id,
+                                &replica_path.join(".folder"),
+                                b"\0".as_slice(),
                             )
                             .await
                         {

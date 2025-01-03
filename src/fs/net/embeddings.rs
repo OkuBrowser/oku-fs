@@ -7,6 +7,21 @@ use std::{collections::HashMap, path::PathBuf};
 use zebra::model::core::{DIM_BGESMALL_EN_1_5, DIM_VIT_BASE_PATCH16_224};
 
 impl OkuFs {
+    /// The embedding vector database for text media.
+    pub fn text_database(&self) -> zebra::database::default::text::DefaultTextDatabase {
+        zebra::database::default::text::DefaultTextDatabase::open_or_create(&"text.zebra".into())
+    }
+
+    /// The embedding vector database for image media.
+    pub fn image_database(&self) -> zebra::database::default::image::DefaultImageDatabase {
+        zebra::database::default::image::DefaultImageDatabase::open_or_create(&"image.zebra".into())
+    }
+
+    /// The embedding vector database for audio media.
+    pub fn audio_database(&self) -> zebra::database::default::audio::DefaultAudioDatabase {
+        zebra::database::default::audio::DefaultAudioDatabase::open_or_create(&"audio.zebra".into())
+    }
+
     /// Fetch an embedding file associated with a post.
     ///
     /// # Arguments
@@ -16,29 +31,23 @@ impl OkuFs {
     /// * `path` - The path to the file to retrieve.
     ///
     /// * `uri` - The URI associated with the OkuNet post.
-    pub async fn fetch_post_embeddings(
+    pub(crate) async fn fetch_post_embeddings(
         &self,
         ticket: &DocTicket,
-        path: PathBuf,
-        uri: String,
+        path: &PathBuf,
+        uri: &str,
     ) -> miette::Result<()> {
         if let Ok(bytes) = self
-            .fetch_file_with_ticket(ticket, path.clone(), Some(home_replica_filters()))
+            .fetch_file_with_ticket(ticket, path, &Some(home_replica_filters()))
             .await
         {
             let embeddings = toml::from_str::<HashMap<EmbeddingModality, Vec<f32>>>(
                 String::from_utf8_lossy(&bytes).as_ref(),
             )
             .into_diagnostic()?;
-            let text_db = zebra::database::default::text::DefaultTextDatabase::open_or_create(
-                &"text.zebra".into(),
-            );
-            let image_db = zebra::database::default::image::DefaultImageDatabase::open_or_create(
-                &"image.zebra".into(),
-            );
-            let audio_db = zebra::database::default::audio::DefaultAudioDatabase::open_or_create(
-                &"audio.zebra".into(),
-            );
+            let text_db = self.text_database();
+            let image_db = self.image_database();
+            let audio_db = self.audio_database();
             embeddings
                 .into_par_iter()
                 .map(|(modality, embedding)| -> miette::Result<()> {
@@ -49,7 +58,7 @@ impl OkuFs {
                                     &vec![embedding
                                         .try_into()
                                         .unwrap_or([0.0; DIM_BGESMALL_EN_1_5])],
-                                    &vec![uri.clone().into()],
+                                    &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;
                         }
@@ -59,7 +68,7 @@ impl OkuFs {
                                     &vec![embedding
                                         .try_into()
                                         .unwrap_or([0.0; DIM_VIT_BASE_PATCH16_224])],
-                                    &vec![uri.clone().into()],
+                                    &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;
                         }
@@ -69,7 +78,7 @@ impl OkuFs {
                                     &vec![embedding
                                         .try_into()
                                         .unwrap_or([0.0; DIM_VIT_BASE_PATCH16_224])],
-                                    &vec![uri.clone().into()],
+                                    &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;
                         }

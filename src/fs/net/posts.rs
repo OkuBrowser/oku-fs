@@ -10,11 +10,15 @@ use crate::{
 use iroh_base::hash::Hash;
 use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::AuthorId;
+use log::error;
 use miette::IntoDiagnostic;
 use rayon::iter::{
     FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 use url::Url;
 
 impl OkuFs {
@@ -25,7 +29,7 @@ impl OkuFs {
     /// A list of the OkuNet posts by the local user.
     pub async fn posts(&self) -> Option<Vec<OkuPost>> {
         let post_files = self
-            .read_directory(self.home_replica().await?, "/posts/".into())
+            .read_directory(&self.home_replica().await?, Path::new("/posts/"))
             .await
             .ok()
             .unwrap_or_default();
@@ -53,12 +57,12 @@ impl OkuFs {
     /// # Returns
     ///
     /// A list of OkuNet posts with the given tag.
-    pub async fn all_posts_with_tag(&self, tag: String) -> Vec<OkuPost> {
+    pub async fn all_posts_with_tag(&self, tag: &String) -> Vec<OkuPost> {
         let mut posts = HashSet::<_>::from_par_iter(self.posts().await.unwrap_or_default());
         posts.extend(DATABASE.get_posts().unwrap_or_default());
         posts
             .into_par_iter()
-            .filter(|x| x.note.tags.contains(&tag))
+            .filter(|x| x.note.tags.contains(tag))
             .collect()
     }
 
@@ -94,17 +98,17 @@ impl OkuFs {
     /// # Returns
     ///
     /// The OkuNet post at the given path.
-    pub async fn post(&self, path: PathBuf) -> miette::Result<OkuPost> {
+    pub async fn post(&self, path: &PathBuf) -> miette::Result<OkuPost> {
         let namespace_id = self
             .home_replica()
             .await
             .ok_or(miette::miette!("Home replica not set … "))?;
-        match self.read_file(namespace_id, path.clone()).await {
+        match self.read_file(&namespace_id, path).await {
             Ok(bytes) => {
                 let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
                 Ok(OkuPost {
-                    entry: self.get_entry(namespace_id, path).await?,
+                    entry: self.get_entry(&namespace_id, path).await?,
                     note,
                 })
             }
@@ -170,28 +174,28 @@ impl OkuFs {
     /// A hash of the post's content.
     pub async fn create_or_modify_post(
         &self,
-        path: Option<PathBuf>,
-        url: Url,
-        title: String,
-        body: String,
-        tags: HashSet<String>,
+        path: &Option<PathBuf>,
+        url: &Url,
+        title: &String,
+        body: &String,
+        tags: &HashSet<String>,
     ) -> miette::Result<Hash> {
         let home_replica_id = self
             .home_replica()
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
         let new_note = OkuNote {
-            url,
-            title,
-            body,
-            tags,
+            url: url.clone(),
+            title: title.to_string(),
+            body: body.to_string(),
+            tags: tags.clone(),
         };
         let post_path = match path {
             Some(given_path) => given_path,
-            None => new_note.suggested_post_path().into(),
+            None => &new_note.suggested_post_path().into(),
         };
         self.create_or_modify_file(
-            home_replica_id,
+            &home_replica_id,
             post_path,
             toml::to_string_pretty(&new_note).into_diagnostic()?,
         )
@@ -207,12 +211,12 @@ impl OkuFs {
     /// # Returns
     ///
     /// The number of entries deleted in the replica, which should be 1 if the file was successfully deleted.
-    pub async fn delete_post(&self, path: PathBuf) -> miette::Result<usize> {
+    pub async fn delete_post(&self, path: &PathBuf) -> miette::Result<usize> {
         let home_replica_id = self
             .home_replica()
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
-        self.delete_file(home_replica_id, path).await
+        self.delete_file(&home_replica_id, path).await
     }
 
     /// Join a swarm to fetch the latest version of an OkuNet post.
@@ -226,21 +230,33 @@ impl OkuFs {
     /// # Returns
     ///
     /// The requested OkuNet post.
-    pub async fn fetch_post(&self, author_id: AuthorId, path: PathBuf) -> miette::Result<OkuPost> {
+    pub async fn fetch_post(
+        &self,
+        author_id: &AuthorId,
+        path: &PathBuf,
+    ) -> miette::Result<OkuPost> {
         let ticket = self
             .resolve_author_id(author_id)
             .await
             .map_err(|e| miette::miette!("{}", e))?;
         let namespace_id = ticket.capability.id();
         match self
-            .fetch_file_with_ticket(&ticket, path.clone(), Some(home_replica_filters()))
+            .fetch_file_with_ticket(&ticket, path, &Some(home_replica_filters()))
             .await
         {
             Ok(bytes) => {
                 let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
+                let mut embedding_path = path.clone();
+                embedding_path.set_extension("embed");
+                if let Err(e) = self
+                    .fetch_post_embeddings(&ticket, &embedding_path, note.url.as_ref())
+                    .await
+                {
+                    error!("{e}")
+                }
                 Ok(OkuPost {
-                    entry: self.get_entry(namespace_id, path).await?,
+                    entry: self.get_entry(&namespace_id, path).await?,
                     note,
                 })
             }
@@ -261,10 +277,10 @@ impl OkuFs {
     /// The requested OkuNet post.
     pub async fn get_or_fetch_post(
         &self,
-        author_id: AuthorId,
-        path: PathBuf,
+        author_id: &AuthorId,
+        path: &PathBuf,
     ) -> miette::Result<OkuPost> {
-        match DATABASE.get_post(author_id, path.clone()).ok().flatten() {
+        match DATABASE.get_post(author_id, path).ok().flatten() {
             Some(post) => Ok(post),
             None => self.fetch_post(author_id, path).await,
         }

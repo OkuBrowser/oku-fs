@@ -24,19 +24,19 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to announce.
     pub async fn announce_mutable_replica(
         &self,
-        namespace_id: NamespaceId,
+        namespace_id: &NamespaceId,
     ) -> miette::Result<NamespaceId> {
         let ticket = mainline::Bytes::from(
-            self.create_document_ticket(namespace_id, ShareMode::Read)
+            self.create_document_ticket(namespace_id, &ShareMode::Read)
                 .await?
                 .to_bytes(),
         );
         let newest_timestamp = self
-            .get_newest_timestamp_in_folder(namespace_id, PathBuf::from("/"))
+            .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
             .await? as i64;
         let replica_private_key = mainline::SigningKey::from_bytes(
             &self
-                .create_document_ticket(namespace_id, ShareMode::Write)
+                .create_document_ticket(namespace_id, &ShareMode::Write)
                 .await?
                 .capability
                 .secret_key()
@@ -58,7 +58,7 @@ impl OkuFs {
                 )
             ),
         }
-        Ok(namespace_id)
+        Ok(*namespace_id)
     }
 
     /// Announces a read-only replica to the Mainline DHT.
@@ -68,7 +68,7 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to announce.
     pub async fn announce_immutable_replica(
         &self,
-        namespace_id: NamespaceId,
+        namespace_id: &NamespaceId,
     ) -> miette::Result<NamespaceId> {
         let public_key_bytes = namespace_id
             .into_public_key()
@@ -76,7 +76,7 @@ impl OkuFs {
             .as_bytes()
             .to_vec();
         let announcement = DATABASE
-            .get_announcement(public_key_bytes)
+            .get_announcement(&public_key_bytes)
             .ok()
             .flatten()
             .ok_or(miette::miette!(
@@ -85,12 +85,12 @@ impl OkuFs {
             ))?;
 
         let ticket = mainline::Bytes::from(
-            self.create_document_ticket(namespace_id, ShareMode::Read)
+            self.create_document_ticket(namespace_id, &ShareMode::Read)
                 .await?
                 .to_bytes(),
         );
         let newest_timestamp = self
-            .get_newest_timestamp_in_folder(namespace_id, PathBuf::from("/"))
+            .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
             .await? as i64;
         let mutable_item = mainline::MutableItem::new_signed_unchecked(
             announcement.key.try_into().map_err(|_e| {
@@ -116,7 +116,7 @@ impl OkuFs {
                 )
             ),
         }
-        Ok(namespace_id)
+        Ok(*namespace_id)
     }
 
     /// Announces a replica to the Mainline DHT.
@@ -128,8 +128,8 @@ impl OkuFs {
     /// * `capability_kind` - Whether the replica is writable by the current node or read-only.
     pub async fn announce_replica(
         &self,
-        namespace_id: NamespaceId,
-        capability_kind: CapabilityKind,
+        namespace_id: &NamespaceId,
+        capability_kind: &CapabilityKind,
     ) -> miette::Result<NamespaceId> {
         match capability_kind {
             CapabilityKind::Read => self.announce_immutable_replica(namespace_id).await,
@@ -144,12 +144,12 @@ impl OkuFs {
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
         let ticket = mainline::Bytes::from(
-            self.create_document_ticket(home_replica, ShareMode::Read)
+            self.create_document_ticket(&home_replica, &ShareMode::Read)
                 .await?
                 .to_bytes(),
         );
         let newest_timestamp = self
-            .get_newest_timestamp_in_folder(home_replica, PathBuf::from("/"))
+            .get_newest_timestamp_in_folder(&home_replica, &PathBuf::from("/"))
             .await? as i64;
         let author_private_key = mainline::SigningKey::from_bytes(
             &self
@@ -188,8 +188,11 @@ impl OkuFs {
         let replicas = self.list_replicas().await?;
         for (replica, capability_kind) in replicas {
             let self_clone = self.clone();
-            future_set
-                .spawn(async move { self_clone.announce_replica(replica, capability_kind).await });
+            future_set.spawn(async move {
+                self_clone
+                    .announce_replica(&replica, &capability_kind)
+                    .await
+            });
         }
         info!("Pending announcements: {} … ", future_set.len());
         // Execute announcements in parallel
@@ -212,7 +215,7 @@ impl OkuFs {
 /// The mapping from an iroh [HashAndFormat] to a bittorrent infohash, aka [mainline::Id].
 ///
 /// Since an infohash is just 20 bytes, this can not be a bidirectional mapping.
-pub fn to_infohash(haf: HashAndFormat) -> mainline::Id {
+pub fn to_infohash(haf: &HashAndFormat) -> mainline::Id {
     let mut data = [0u8; 20];
     data.copy_from_slice(&haf.hash.as_bytes()[..20]);
     mainline::Id::from_bytes(data).unwrap()

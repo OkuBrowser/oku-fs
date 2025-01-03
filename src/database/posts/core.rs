@@ -131,7 +131,7 @@ impl TryFrom<TantivyDocument> for OkuPost {
             .ok_or(anyhow::anyhow!("No path for document in index … "))?
             .to_string();
         DATABASE
-            .get_post(author_id, path.clone().into())
+            .get_post(&author_id, &path.clone().into())
             .ok()
             .flatten()
             .ok_or(anyhow::anyhow!(
@@ -158,7 +158,7 @@ impl OkuPost {
 
     /// Obtain the author of this post from the OkuNet database.
     pub fn user(&self) -> OkuUser {
-        match DATABASE.get_user(self.entry.author()).ok().flatten() {
+        match DATABASE.get_user(&self.entry.author()).ok().flatten() {
             Some(user) => user,
             None => OkuUser {
                 author_id: self.entry.author(),
@@ -186,11 +186,11 @@ pub struct OkuNote {
 impl OkuNote {
     /// Generate a suggested post path for the note.
     pub fn suggested_post_path(&self) -> String {
-        Self::suggested_post_path_from_url(self.url.to_string())
+        Self::suggested_post_path_from_url(&self.url.to_string())
     }
 
     /// Generate a suggested post path using a URL.
-    pub fn suggested_post_path_from_url(url: String) -> String {
+    pub fn suggested_post_path_from_url(url: &String) -> String {
         format!("/posts/{}.toml", bs58::encode(url.as_bytes()).into_string())
     }
 }

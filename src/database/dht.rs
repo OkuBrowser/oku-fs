@@ -30,10 +30,11 @@ impl OkuDatabase {
     /// The previous record of the announcement, if one existed.
     pub fn upsert_announcement(
         &self,
-        announcement: ReplicaAnnouncement,
+        announcement: &ReplicaAnnouncement,
     ) -> miette::Result<Option<ReplicaAnnouncement>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
-        let old_value: Option<ReplicaAnnouncement> = rw.upsert(announcement).into_diagnostic()?;
+        let old_value: Option<ReplicaAnnouncement> =
+            rw.upsert(announcement.to_owned()).into_diagnostic()?;
         rw.commit().into_diagnostic()?;
         Ok(old_value)
     }
@@ -49,12 +50,12 @@ impl OkuDatabase {
     /// A list containing the previous record of each announcement, if one existed.
     pub fn upsert_announcements(
         &self,
-        announcements: Vec<ReplicaAnnouncement>,
+        announcements: &[ReplicaAnnouncement],
     ) -> miette::Result<Vec<Option<ReplicaAnnouncement>>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let old_announcements: Vec<_> = announcements
-            .clone()
-            .into_iter()
+            .iter()
+            .cloned()
             .filter_map(|announcement| rw.upsert(announcement).ok())
             .collect();
         rw.commit().into_diagnostic()?;
@@ -72,10 +73,10 @@ impl OkuDatabase {
     /// The deleted replica announcement record.
     pub fn delete_announcement(
         &self,
-        announcement: ReplicaAnnouncement,
+        announcement: &ReplicaAnnouncement,
     ) -> miette::Result<ReplicaAnnouncement> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
-        let removed_announcement = rw.remove(announcement).into_diagnostic()?;
+        let removed_announcement = rw.remove(announcement.to_owned()).into_diagnostic()?;
         rw.commit().into_diagnostic()?;
         Ok(removed_announcement)
     }
@@ -91,12 +92,12 @@ impl OkuDatabase {
     /// A list containing the deleted replica announcement records.
     pub fn delete_announcements(
         &self,
-        announcements: Vec<ReplicaAnnouncement>,
+        announcements: &[ReplicaAnnouncement],
     ) -> miette::Result<Vec<ReplicaAnnouncement>> {
         let rw = self.database.rw_transaction().into_diagnostic()?;
         let removed_announcements = announcements
-            .into_iter()
-            .filter_map(|announcement| rw.remove(announcement).ok())
+            .iter()
+            .filter_map(|announcement| rw.remove(announcement.to_owned()).ok())
             .collect();
         rw.commit().into_diagnostic()?;
         Ok(removed_announcements)
@@ -127,8 +128,8 @@ impl OkuDatabase {
     /// # Returns
     ///
     /// A replica announcement record.
-    pub fn get_announcement(&self, key: Vec<u8>) -> miette::Result<Option<ReplicaAnnouncement>> {
+    pub fn get_announcement(&self, key: &Vec<u8>) -> miette::Result<Option<ReplicaAnnouncement>> {
         let r = self.database.r_transaction().into_diagnostic()?;
-        r.get().primary(key).into_diagnostic()
+        r.get().primary(key.to_owned()).into_diagnostic()
     }
 }

@@ -44,10 +44,10 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to delete.
-    pub async fn delete_replica(&self, namespace_id: NamespaceId) -> miette::Result<()> {
+    pub async fn delete_replica(&self, namespace_id: &NamespaceId) -> miette::Result<()> {
         let docs_client = &self.docs_engine.client();
         self.replica_sender.send_replace(());
-        Ok(docs_client.drop_doc(namespace_id).await.map_err(|e| {
+        Ok(docs_client.drop_doc(*namespace_id).await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotDeleteReplica
         })?)
@@ -97,12 +97,12 @@ impl OkuFs {
     /// If either the replica can be read from & written to, or if it can only be read from.
     pub async fn get_replica_capability(
         &self,
-        namespace_id: NamespaceId,
+        namespace_id: &NamespaceId,
     ) -> miette::Result<CapabilityKind> {
         let replicas_vec = self.list_replicas().await?;
         match replicas_vec
             .par_iter()
-            .find_any(|replica| replica.0 == namespace_id)
+            .find_any(|replica| replica.0 == *namespace_id)
         {
             Some(replica) => Ok(replica.1),
             None => Err(OkuFuseError::NoReplica(iroh_base::base32::fmt(namespace_id)).into()),
@@ -118,8 +118,8 @@ impl OkuFs {
     /// * `path` - An optional path of requested files within the replica.
     pub async fn fetch_replica_by_id(
         &self,
-        namespace_id: NamespaceId,
-        path: Option<PathBuf>,
+        namespace_id: &NamespaceId,
+        path: &Option<PathBuf>,
     ) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
         let docs_client = self.docs_engine.client();
@@ -127,7 +127,7 @@ impl OkuFs {
         match path.clone() {
             Some(path) => {
                 let replica = docs_client.import_namespace(ticket.capability).await?;
-                let filter = FilterKind::Prefix(path_to_entry_prefix(path));
+                let filter = FilterKind::Prefix(path_to_entry_prefix(&path));
                 replica
                     .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(vec![
                         filter,
@@ -148,7 +148,7 @@ impl OkuFs {
                 }
             }
             None => {
-                if let Some(replica) = docs_client.open(namespace_id).await.unwrap_or(None) {
+                if let Some(replica) = docs_client.open(*namespace_id).await.unwrap_or(None) {
                     replica
                         .set_download_policy(iroh_docs::store::DownloadPolicy::default())
                         .await?;
@@ -199,8 +199,8 @@ impl OkuFs {
     pub async fn fetch_replica_by_ticket(
         &self,
         ticket: &DocTicket,
-        path: Option<PathBuf>,
-        filters: Option<Vec<FilterKind>>,
+        path: &Option<PathBuf>,
+        filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<()> {
         let namespace_id = ticket.capability.id();
         let docs_client = self.docs_engine.client();
@@ -210,8 +210,9 @@ impl OkuFs {
                 let replica = docs_client
                     .import_namespace(ticket.capability.clone())
                     .await?;
-                let filters =
-                    filters.unwrap_or(vec![FilterKind::Prefix(path_to_entry_prefix(path))]);
+                let filters = filters
+                    .clone()
+                    .unwrap_or(vec![FilterKind::Prefix(path_to_entry_prefix(&path))]);
                 replica
                     .set_download_policy(iroh_docs::store::DownloadPolicy::NothingExcept(filters))
                     .await?;
@@ -275,7 +276,7 @@ impl OkuFs {
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to fetch.
-    pub async fn sync_replica(&self, namespace_id: NamespaceId) -> anyhow::Result<()> {
+    pub async fn sync_replica(&self, namespace_id: &NamespaceId) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
         let docs_client = self.docs_engine.client();
         let replica_sender = self.replica_sender.clone();
@@ -306,19 +307,19 @@ impl OkuFs {
     /// A ticket for the replica with the given ID.
     pub async fn resolve_namespace_id(
         &self,
-        namespace_id: NamespaceId,
+        namespace_id: &NamespaceId,
     ) -> anyhow::Result<DocTicket> {
         let get_stream = self.dht.get_mutable(namespace_id.as_bytes(), None, None)?;
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {
-            let _ = DATABASE.upsert_announcement(ReplicaAnnouncement {
+            let _ = DATABASE.upsert_announcement(&ReplicaAnnouncement {
                 key: mutable_item.key().to_vec(),
                 signature: mutable_item.signature().to_vec(),
             });
             tickets.push(DocTicket::from_bytes(mutable_item.value())?)
         }
-        merge_tickets(tickets).ok_or(anyhow!(
+        merge_tickets(&tickets).ok_or(anyhow!(
             "Could not find tickets for {} … ",
             iroh_base::base32::fmt(namespace_id)
         ))
@@ -337,8 +338,8 @@ impl OkuFs {
     /// A ticket to retrieve the given replica with the requested permissions.
     pub async fn create_document_ticket(
         &self,
-        namespace_id: NamespaceId,
-        share_mode: ShareMode,
+        namespace_id: &NamespaceId,
+        share_mode: &ShareMode,
     ) -> miette::Result<DocTicket> {
         if matches!(share_mode, ShareMode::Write)
             && matches!(
@@ -346,11 +347,11 @@ impl OkuFs {
                 CapabilityKind::Read
             )
         {
-            Err(OkuFsError::CannotShareReplicaWritable(namespace_id).into())
+            Err(OkuFsError::CannotShareReplicaWritable(*namespace_id).into())
         } else {
             let docs_client = &self.docs_engine.client();
             let document = docs_client
-                .open(namespace_id)
+                .open(*namespace_id)
                 .await
                 .map_err(|e| {
                     error!("{}", e);
@@ -358,7 +359,7 @@ impl OkuFs {
                 })?
                 .ok_or(OkuFsError::FsEntryNotFound)?;
             Ok(document
-                .share(share_mode, AddrInfoOptions::RelayAndAddresses)
+                .share(share_mode.clone(), AddrInfoOptions::RelayAndAddresses)
                 .await
                 .map_err(|e| {
                     error!("{}", e);
