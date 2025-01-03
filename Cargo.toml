@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "oku-fs"
-path = "src/cli.rs"
+path = "src/cli/mod.rs"
 doc = false
 required-features = ["cli"]
 
@@ -54,11 +54,13 @@ rayon = "1.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 tantivy = "0.22.0"
 zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = ["default_db"]}
+# zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
 data-encoding = "2.6.0"
 hex = "0.4.3"
-# zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
+jiff = { version = "0.1.19", optional = true }
+dashmap = "6.1.0"
 
 [features]
 default = []
 fuse = ["dep:libc", "dep:fuse_mt", "dep:fuser"]
-cli = ["dep:clap", "dep:env_logger"]
+cli = ["dep:clap", "dep:env_logger", "dep:jiff"]

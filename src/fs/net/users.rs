@@ -232,6 +232,43 @@ impl OkuFs {
         self.set_identity(&identity).await
     }
 
+    /// Follow a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to follow's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn follow(&self, author_id: &AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        match identity.following.contains(author_id) {
+            true => (),
+            false => {
+                identity.following.insert(*author_id);
+            }
+        };
+        self.set_identity(&identity).await
+    }
+
+    /// Unfollow a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to unfollow's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn unfollow(&self, author_id: &AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        if identity.following.contains(author_id) {
+            identity.following.remove(author_id);
+        };
+        self.set_identity(&identity).await
+    }
+
     /// Block or unblock a user.
     ///
     /// # Arguments
@@ -246,6 +283,43 @@ impl OkuFs {
         match identity.blocked.contains(author_id) {
             true => identity.blocked.remove(author_id),
             false => identity.blocked.insert(*author_id),
+        };
+        self.set_identity(&identity).await
+    }
+
+    /// Block a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to block's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn block(&self, author_id: &AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        match identity.blocked.contains(author_id) {
+            true => (),
+            false => {
+                identity.blocked.insert(*author_id);
+            }
+        };
+        self.set_identity(&identity).await
+    }
+
+    /// Unblock a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The user to unblock's content authorship ID.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the new identity file in the local user's home replica.
+    pub async fn unblock(&self, author_id: &AuthorId) -> miette::Result<Hash> {
+        let mut identity = self.identity().await.unwrap_or_default();
+        if identity.blocked.contains(author_id) {
+            identity.blocked.remove(author_id);
         };
         self.set_identity(&identity).await
     }

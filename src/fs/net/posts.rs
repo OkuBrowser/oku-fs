@@ -7,6 +7,7 @@ use crate::{
     },
     fs::OkuFs,
 };
+use dashmap::DashMap;
 use iroh_blobs::Hash;
 use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::AuthorId;
@@ -16,8 +17,9 @@ use rayon::iter::{
     FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::atomic::AtomicUsize,
 };
 use url::Url;
 
@@ -48,45 +50,74 @@ impl OkuFs {
         )
     }
 
-    /// Retrieves all posts containing a given tag, whether they are authored by the local user or an OkuNet user.
-    ///
-    /// # Arguments
-    ///
-    /// * `tag` - A tag.
+    /// Retrieve all posts known to this Oku node.
     ///
     /// # Returns
     ///
-    /// A list of OkuNet posts with the given tag.
-    pub async fn all_posts_with_tag(&self, tag: &String) -> Vec<OkuPost> {
+    /// All posts known to this Oku node.
+    pub async fn all_posts(&self) -> HashSet<OkuPost> {
         let mut posts = HashSet::<_>::from_par_iter(self.posts().await.unwrap_or_default());
         posts.extend(DATABASE.get_posts().unwrap_or_default());
         posts
-            .into_par_iter()
-            .filter(|x| x.note.tags.contains(tag))
-            .collect()
     }
 
-    /// Retrieves the set of all tags that appear in posts authored by the local user or an OkuNet user.
+    /// Filters posts containing at least one of the given tags.
+    ///
+    /// # Arguments
+    ///
+    /// * `posts` - A set of posts.
+    ///
+    /// * `tags` - A set of tags.
     ///
     /// # Returns
     ///
-    /// All tags that appear across all posts on the local machine.
-    pub async fn all_tags(&self) -> HashSet<String> {
-        let mut tags = HashSet::<_>::from_par_iter(
-            self.posts()
-                .await
-                .unwrap_or_default()
-                .into_par_iter()
-                .flat_map(|x| x.note.tags),
-        );
-        tags.extend(
-            DATABASE
-                .get_posts()
-                .unwrap_or_default()
-                .into_iter()
-                .flat_map(|x| x.note.tags),
-        );
-        tags
+    /// A list of OkuNet posts with the given tags.
+    pub async fn posts_with_tags(&self, posts: &[OkuPost], tags: &HashSet<String>) -> Vec<OkuPost> {
+        posts
+            .to_owned()
+            .into_par_iter()
+            .filter(|x| !x.note.tags.is_disjoint(tags))
+            .collect()
+    }
+
+    /// Retrieves the set of all tags that appear in the given posts.
+    ///
+    /// # Arguments
+    ///
+    /// * `posts` - A set of posts.
+    ///
+    /// # Returns
+    ///
+    /// All tags that appear across the posts.
+    pub async fn all_tags(&self, posts: &HashSet<OkuPost>) -> HashSet<String> {
+        HashSet::<_>::from_par_iter(posts.into_par_iter().flat_map(|x| x.note.tags.clone()))
+    }
+
+    /// Retrieves a mapping of tags to the number of posts containing them.
+    ///
+    /// # Arguments
+    ///
+    /// * `posts` - A set of posts.
+    ///
+    /// # Returns
+    ///
+    /// All tags that appear across the posts, and how often they appear.
+    pub async fn count_tags(&self, posts: &HashSet<OkuPost>) -> HashMap<String, usize> {
+        let result: DashMap<String, AtomicUsize> = DashMap::new();
+        posts.into_par_iter().for_each(|x| {
+            x.note.tags.par_iter().for_each(|y| match result.get(y) {
+                None => {
+                    result.insert(y.to_owned(), AtomicUsize::new(1));
+                }
+                Some(v) => {
+                    v.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        });
+        result
+            .into_par_iter()
+            .map(|(k, v)| (k, v.into_inner()))
+            .collect()
     }
 
     /// Retrieves an OkuNet post authored by the local user using its path.

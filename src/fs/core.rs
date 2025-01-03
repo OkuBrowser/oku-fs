@@ -140,10 +140,20 @@ impl OkuFs {
     ///
     /// The content of the entry, as raw bytes.
     pub async fn content_bytes(&self, entry: &iroh_docs::Entry) -> anyhow::Result<Bytes> {
-        self.blobs
-            .client()
-            .read_to_bytes(entry.content_hash())
-            .await
+        self.content_bytes_by_hash(&entry.content_hash()).await
+    }
+
+    /// Retrieve the content of a document entry by its hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `hash` - The content hash of an Iroh document.
+    ///
+    /// # Returns
+    ///
+    /// The content of the entry, as raw bytes.
+    pub async fn content_bytes_by_hash(&self, hash: &iroh_blobs::Hash) -> anyhow::Result<Bytes> {
+        self.blobs.client().read_to_bytes(*hash).await
     }
 
     /// Determines the oldest timestamp of a file entry in any replica stored locally.
