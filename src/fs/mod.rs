@@ -13,29 +13,17 @@ use tokio::runtime::Handle;
 use tokio::sync::watch::Sender;
 
 /// Core functionality of an Oku file system.
-mod core;
+pub mod core;
 /// Directory-related functionality of an Oku file system.
-mod directory;
+pub mod directory;
 /// File-related functionality of an Oku file system.
-mod file;
+pub mod file;
 /// Implementation of OkuNet.
-mod net;
+pub mod net;
 /// Replica-related functionality of an Oku file system.
-mod replica;
+pub mod replica;
 /// Useful functions for implementing the Oku file system.
-mod util;
-#[allow(unused_imports)]
-pub use self::core::*;
-#[allow(unused_imports)]
-pub use self::directory::*;
-#[allow(unused_imports)]
-pub use self::file::*;
-#[allow(unused_imports)]
-pub use self::net::*;
-#[allow(unused_imports)]
-pub use self::replica::*;
-#[allow(unused_imports)]
-pub use self::util::*;
+pub mod util;
 
 /// The path on disk where the file system is stored.
 pub const FS_PATH: &str = ".oku";

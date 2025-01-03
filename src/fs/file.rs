@@ -13,6 +13,8 @@ use iroh_docs::NamespaceId;
 use log::{error, info};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
+use util::path_to_entry_key;
+use util::path_to_entry_prefix;
 
 impl OkuFs {
     /// Lists files in a replica.

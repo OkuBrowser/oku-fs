@@ -14,6 +14,9 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use std::path::PathBuf;
+use util::entry_key_to_path;
+use util::normalise_path;
+use util::path_to_entry_prefix;
 
 impl OkuFs {
     /// Reads the contents of the files in a directory.

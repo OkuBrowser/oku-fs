@@ -152,7 +152,7 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// Tye content of the entry, as raw bytes.
+    /// The content of the entry, as raw bytes.
     pub async fn content_bytes(&self, entry: &iroh_docs::Entry) -> anyhow::Result<Bytes> {
         let mut data_reader = self
             .docs_engine

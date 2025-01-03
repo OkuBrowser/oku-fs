@@ -48,11 +48,13 @@ bs58 = "0.5.1"
 anyhow = "1.0.94"
 native_db = "0.8.1"
 native_model = "0.4.20"
-serde = "1.0.215"
+serde = "1.0.216"
 toml = "0.8.19"
 rayon = "1.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 tantivy = "0.22.0"
+zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = ["default_db"]}
+# zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
 
 [features]
 default = []

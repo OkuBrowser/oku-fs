@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
-// #![feature(doc_auto_cfg)]
+#![feature(doc_auto_cfg)]
+#![feature(trait_upcasting)]
 #![warn(missing_docs)]
 
 /// Configuration of an Oku file system node.

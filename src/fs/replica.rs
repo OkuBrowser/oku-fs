@@ -16,6 +16,7 @@ use iroh_docs::NamespaceId;
 use log::{error, info};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
+use util::{merge_tickets, path_to_entry_prefix};
 
 impl OkuFs {
     /// Creates a new replica in the file system.

@@ -1,5 +1,5 @@
 use super::core::*;
-use super::posts::*;
+use super::posts::core::OkuPost;
 use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::AuthorId;
 use log::error;

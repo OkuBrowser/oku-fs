@@ -1,5 +1,5 @@
 use super::dht::*;
-use super::posts::*;
+use super::posts::core::OkuPost;
 use super::users::*;
 use crate::fs::FS_PATH;
 use miette::IntoDiagnostic;
@@ -35,5 +35,14 @@ impl OkuDatabase {
                 .create(&MODELS, &*DATABASE_PATH)
                 .into_diagnostic()?,
         })
+    }
+
+    /// Perform a database migration.
+    pub fn migrate(&self) -> miette::Result<()> {
+        let rw = self.database.rw_transaction().into_diagnostic()?;
+        rw.migrate::<OkuUser>().into_diagnostic()?;
+        rw.migrate::<OkuPost>().into_diagnostic()?;
+        rw.migrate::<ReplicaAnnouncement>().into_diagnostic()?;
+        rw.commit().into_diagnostic()
     }
 }
