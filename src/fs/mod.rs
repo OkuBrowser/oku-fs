@@ -1,6 +1,6 @@
 use iroh_blobs::net_protocol::Blobs;
 use iroh_blobs::util::local_pool::LocalPool;
-use iroh_docs::engine::Engine;
+use iroh_docs::protocol::Docs;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,8 +31,6 @@ pub(crate) static NODE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| PathBuf::from(FS_PATH).join("node"));
 pub(crate) static BLOBS_PATH: LazyLock<PathBuf> = LazyLock::new(|| NODE_PATH.join("blobs"));
 pub(crate) static DOCS_PATH: LazyLock<PathBuf> = LazyLock::new(|| NODE_PATH.join("docs.redb"));
-pub(crate) static DEFAULT_AUTHOR_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| NODE_PATH.join("default-author"));
 
 /// An instance of an Oku file system.
 ///
@@ -41,8 +39,8 @@ pub(crate) static DEFAULT_AUTHOR_PATH: LazyLock<PathBuf> =
 pub struct OkuFs {
     pub(crate) local_pool: Arc<LocalPool>,
     pub(crate) endpoint: iroh::Endpoint,
-    pub(crate) blobs: Arc<Blobs<iroh_blobs::store::fs::Store>>,
-    pub(crate) docs_engine: Arc<Engine<iroh_blobs::store::fs::Store>>,
+    pub(crate) blobs: Blobs<iroh_blobs::store::fs::Store>,
+    pub(crate) docs: Docs<iroh_blobs::store::fs::Store>,
     pub(crate) router: iroh::protocol::Router,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     /// A watcher for when replicas are created, deleted, or imported.

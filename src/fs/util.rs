@@ -59,6 +59,77 @@ pub fn path_to_entry_prefix(path: &PathBuf) -> Bytes {
     path_bytes.into()
 }
 
+/// Format bytes as a base32-encoded lowercase string.
+///
+/// # Arguments
+///
+/// * `bytes` - The bytes to encode.
+///
+/// # Return
+///
+/// The bytes encoded as a lowercase string, represented in base32.
+pub fn fmt(bytes: impl AsRef<[u8]>) -> String {
+    let mut text = data_encoding::BASE32_NOPAD.encode(bytes.as_ref());
+    text.make_ascii_lowercase();
+    text
+}
+
+/// Format first ten bytes of a byte list as a base32-encoded lowercase string.
+///
+/// # Arguments
+///
+/// * `bytes` - The byte list to encode.
+///
+/// # Return
+///
+/// The first ten bytes encoded as a lowercase string, represented in base32.
+pub fn fmt_short(bytes: impl AsRef<[u8]>) -> String {
+    let len = bytes.as_ref().len().min(10);
+    let mut text = data_encoding::BASE32_NOPAD.encode(&bytes.as_ref()[..len]);
+    text.make_ascii_lowercase();
+    text
+}
+
+/// Parse a string as a base32-encoded byte array of length `N`.
+///
+/// # Arguments
+///
+/// * `input` - The string to parse.
+///
+/// # Returns
+///
+/// An array of bytes of length `N`.
+pub fn parse_array<const N: usize>(input: &str) -> miette::Result<[u8; N]> {
+    data_encoding::BASE32_NOPAD
+        .decode(input.to_ascii_uppercase().as_bytes())
+        .into_diagnostic()?
+        .try_into()
+        .map_err(|_| {
+            miette::miette!(
+                "Unable to parse {input} as a base32-encoded byte array of length {N} … "
+            )
+        })
+}
+
+/// Parse a string either as a hex-encoded or base32-encoded byte array of length `LEN`.
+///
+/// # Arguments
+///
+/// * `input` - The string to parse.
+///
+/// # Returns
+///
+/// An array of bytes of length `LEN`.
+pub fn parse_array_hex_or_base32<const LEN: usize>(input: &str) -> miette::Result<[u8; LEN]> {
+    let mut bytes = [0u8; LEN];
+    if input.len() == LEN * 2 {
+        hex::decode_to_slice(input, &mut bytes).into_diagnostic()?;
+        Ok(bytes)
+    } else {
+        Ok(parse_array(input)?)
+    }
+}
+
 /// Merge multiple tickets into one, returning `None` if no tickets were given.
 ///
 /// # Arguments

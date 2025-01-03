@@ -1,7 +1,7 @@
 use crate::database::core::DATABASE;
 use crate::{error::OkuDiscoveryError, fs::OkuFs};
-use iroh_base::hash::HashAndFormat;
 use iroh_base::ticket::Ticket;
+use iroh_blobs::HashAndFormat;
 use iroh_docs::rpc::client::docs::ShareMode;
 use iroh_docs::sync::CapabilityKind;
 use iroh_docs::NamespaceId;
@@ -48,12 +48,12 @@ impl OkuFs {
         match self.dht.put_mutable(mutable_item).await {
             Ok(_) => info!(
                 "Announced mutable replica {} … ",
-                iroh_base::base32::fmt(namespace_id)
+                crate::fs::util::fmt(namespace_id)
             ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    iroh_base::base32::fmt(namespace_id),
+                    crate::fs::util::fmt(namespace_id),
                     e.to_string()
                 )
             ),
@@ -81,7 +81,7 @@ impl OkuFs {
             .flatten()
             .ok_or(miette::miette!(
                 "Prior announcement not found in database for replica {} … ",
-                iroh_base::base32::fmt(namespace_id)
+                crate::fs::util::fmt(namespace_id)
             ))?;
 
         let ticket = mainline::Bytes::from(
@@ -106,12 +106,12 @@ impl OkuFs {
         match self.dht.put_mutable(mutable_item).await {
             Ok(_) => info!(
                 "Announced immutable replica {} … ",
-                iroh_base::base32::fmt(namespace_id)
+                crate::fs::util::fmt(namespace_id)
             ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    iroh_base::base32::fmt(namespace_id),
+                    crate::fs::util::fmt(namespace_id),
                     e.to_string()
                 )
             ),
@@ -163,12 +163,12 @@ impl OkuFs {
         match self.dht.put_mutable(mutable_item).await {
             Ok(_) => info!(
                 "Announced home replica {} … ",
-                iroh_base::base32::fmt(home_replica)
+                crate::fs::util::fmt(home_replica)
             ),
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
-                    iroh_base::base32::fmt(home_replica),
+                    crate::fs::util::fmt(home_replica),
                     e.to_string()
                 )
             ),

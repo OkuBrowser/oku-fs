@@ -56,7 +56,7 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
         if let Some(replica_id) = components.next() {
             let replica_id_string = replica_id.as_os_str().to_str().unwrap_or_default();
             let namespace_id = NamespaceId::from(
-                iroh_base::base32::parse_array_hex_or_base32::<32>(replica_id_string)
+                crate::fs::util::parse_array_hex_or_base32::<32>(replica_id_string)
                     .unwrap_or_default(),
             );
             let replica_path = PathBuf::from("/").join(components.as_path()).to_path_buf();
@@ -561,7 +561,7 @@ impl FilesystemMT for OkuFs {
                         Ok(replicas) => {
                             for (replica, _capability_kind) in replicas {
                                 directory_entries.push(DirectoryEntry {
-                                    name: iroh_base::base32::fmt(replica).into(),
+                                    name: crate::fs::util::fmt(replica).into(),
                                     kind: fuse_mt::FileType::Directory,
                                 });
                             }

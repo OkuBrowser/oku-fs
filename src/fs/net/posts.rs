@@ -7,7 +7,7 @@ use crate::{
     },
     fs::OkuFs,
 };
-use iroh_base::hash::Hash;
+use iroh_blobs::Hash;
 use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::AuthorId;
 use log::error;

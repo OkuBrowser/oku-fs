@@ -209,7 +209,7 @@ async fn main() -> miette::Result<()> {
                 "Replicas: {:#?}",
                 replicas
                     .par_iter()
-                    .map(|replica| (iroh_base::base32::fmt(replica.0), replica.1))
+                    .map(|replica| (oku_fs::fs::util::fmt(replica.0), replica.1))
                     .collect::<Vec<_>>()
             );
         }

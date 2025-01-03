@@ -31,29 +31,31 @@ clap = { version = "4.5.23", features = ["derive"], optional = true }
 fuse_mt = { version = "0.6.1", optional = true }
 fuser = { version = "0.13.0", optional = true }
 futures = "0.3.31"
-iroh = { version = "0.29.0", features = ["discovery-local-network"] }
-iroh-docs = "0.29.0"
-iroh-base = "0.29.0"
-iroh-blobs = "0.29.0"
-iroh-gossip = "0.29.0"
-libc = { version = "0.2.168", optional = true }
-mainline = { version = "4.1.0", features = ["async"] }
+iroh = { version = "0.30.0", features = ["discovery-local-network"] }
+iroh-docs = { version = "0.30.0", features = ["rpc"] }
+iroh-base = "0.30.0"
+iroh-blobs = "0.30.0"
+iroh-gossip = "0.30.1"
+libc = { version = "0.2.169", optional = true }
+mainline = { version = "4.2.0", features = ["async"] }
 miette = { version = "7.4.0", features = ["fancy"] }
 path-clean = "1.0.1"
-thiserror = "2.0.6"
+thiserror = "2.0.9"
 tokio = "1.42.0"
-env_logger = { version = "0.11.5", optional = true }
+env_logger = { version = "0.11.6", optional = true }
 log = "0.4.22"
 bs58 = "0.5.1"
-anyhow = "1.0.94"
+anyhow = "1.0.95"
 native_db = "0.8.1"
 native_model = "0.4.20"
-serde = "1.0.216"
+serde = "1.0.217"
 toml = "0.8.19"
 rayon = "1.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 tantivy = "0.22.0"
 zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = ["default_db"]}
+data-encoding = "2.6.0"
+hex = "0.4.3"
 # zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
 
 [features]

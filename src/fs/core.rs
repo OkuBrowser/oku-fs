@@ -1,11 +1,10 @@
 use super::*;
 use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
-use anyhow::anyhow;
 use bytes::Bytes;
 #[cfg(feature = "fuse")]
 use fuse_mt::spawn_mount;
-use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
-use iroh_blobs::store::{Map, Store};
+use iroh::protocol::ProtocolHandler;
+use iroh_blobs::store::Store;
 use iroh_docs::Author;
 use log::{error, info};
 #[cfg(feature = "fuse")]
@@ -29,9 +28,9 @@ impl OkuFs {
     ///
     /// The private key of the node's authorship credentials.
     pub async fn get_author(&self) -> anyhow::Result<Author> {
-        let default_author_id = self.docs_engine.default_author.get();
+        let default_author_id = self.default_author();
 
-        self.docs_engine
+        self.docs
             .client()
             .authors()
             .export(default_author_id)
@@ -40,7 +39,7 @@ impl OkuFs {
             .flatten()
             .ok_or(anyhow::anyhow!(
                 "Missing private key for default author ({}).",
-                iroh_base::base32::fmt_short(default_author_id)
+                crate::fs::util::fmt_short(default_author_id)
             ))
     }
 
@@ -65,34 +64,21 @@ impl OkuFs {
         let blobs = iroh_blobs::net_protocol::Blobs::persistent(BLOBS_PATH.clone())
             .await?
             .build(local_pool.handle(), &endpoint);
-        let gossip = iroh_gossip::net::Gossip::from_endpoint(
-            endpoint.clone(),
-            iroh_gossip::proto::topic::Config::default(),
-            &iroh::AddrInfo::default(),
-        );
-
-        let replica_store = iroh_docs::store::fs::Store::persistent(DOCS_PATH.clone())?;
-        let docs_engine = Arc::new(
-            iroh_docs::engine::Engine::spawn(
-                endpoint.clone(),
-                gossip,
-                replica_store,
-                blobs.store().clone(),
-                blobs.downloader().clone(),
-                iroh_docs::engine::DefaultAuthorStorage::Persistent(DEFAULT_AUTHOR_PATH.clone()),
-                local_pool.handle().clone(),
-            )
-            .await?,
-        );
+        let gossip = iroh_gossip::net::Gossip::builder()
+            .spawn(endpoint.clone())
+            .await?;
+        let docs = iroh_docs::protocol::Docs::persistent(DOCS_PATH.clone())
+            .spawn(&blobs, &gossip)
+            .await?;
 
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
-            .accept(iroh_docs::ALPN, docs_engine.clone())
+            .accept(iroh_docs::ALPN, docs.clone())
             .spawn()
             .await?;
         info!(
             "Default author ID is {} … ",
-            iroh_base::base32::fmt_short(docs_engine.client().authors().default().await?)
+            crate::fs::util::fmt_short(docs.client().authors().default().await.unwrap_or_default())
         );
 
         let (replica_sender, _replica_receiver) = watch::channel(());
@@ -102,7 +88,7 @@ impl OkuFs {
             local_pool,
             endpoint,
             blobs,
-            docs_engine,
+            docs,
             router,
             replica_sender,
             okunet_fetch_sender,
@@ -136,8 +122,8 @@ impl OkuFs {
     pub async fn shutdown(self) {
         let _ = self.endpoint.close().await;
         let _ = self.router.shutdown().await;
-        let _ = self.docs_engine.shutdown().await;
-        self.docs_engine.blob_store().shutdown().await;
+        self.docs.shutdown().await;
+        self.blobs.shutdown().await;
         self.blobs.store().shutdown().await;
         if let Some(local_pool) = Arc::into_inner(self.local_pool) {
             local_pool.shutdown().await
@@ -154,22 +140,10 @@ impl OkuFs {
     ///
     /// The content of the entry, as raw bytes.
     pub async fn content_bytes(&self, entry: &iroh_docs::Entry) -> anyhow::Result<Bytes> {
-        let mut data_reader = self
-            .docs_engine
-            .blob_store()
-            .get(&entry.content_hash())
+        self.blobs
+            .client()
+            .read_to_bytes(entry.content_hash())
             .await
-            .ok()
-            .flatten()
-            .map(|x| x.data_reader())
-            .ok_or(anyhow!(
-                "Unable to get data reader for document entry {} … ",
-                String::from_utf8_lossy(entry.key())
-            ))?;
-        data_reader
-            .read_at(0, usize::MAX)
-            .await
-            .map_err(|e| anyhow!("{}", e))
     }
 
     /// Determines the oldest timestamp of a file entry in any replica stored locally.

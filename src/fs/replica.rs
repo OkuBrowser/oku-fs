@@ -5,10 +5,10 @@ use crate::database::dht::ReplicaAnnouncement;
 use crate::error::{OkuDiscoveryError, OkuFsError, OkuFuseError};
 use anyhow::anyhow;
 use futures::{pin_mut, StreamExt};
-use iroh_base::node_addr::AddrInfoOptions;
 use iroh_base::ticket::Ticket;
 use iroh_docs::engine::LiveEvent;
 use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::rpc::AddrInfoOptions;
 use iroh_docs::store::FilterKind;
 use iroh_docs::sync::CapabilityKind;
 use iroh_docs::DocTicket;
@@ -25,7 +25,7 @@ impl OkuFs {
     ///
     /// The ID of the new replica, being its public key.
     pub async fn create_replica(&self) -> miette::Result<NamespaceId> {
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let new_document = docs_client.create().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotCreateReplica
@@ -45,7 +45,7 @@ impl OkuFs {
     ///
     /// * `namespace_id` - The ID of the replica to delete.
     pub async fn delete_replica(&self, namespace_id: &NamespaceId) -> miette::Result<()> {
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         self.replica_sender.send_replace(());
         Ok(docs_client.drop_doc(*namespace_id).await.map_err(|e| {
             error!("{}", e);
@@ -59,7 +59,7 @@ impl OkuFs {
     ///
     /// A list of all replicas in the file system.
     pub async fn list_replicas(&self) -> miette::Result<Vec<(NamespaceId, CapabilityKind)>> {
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let replicas = docs_client.list().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotListReplicas
@@ -105,7 +105,7 @@ impl OkuFs {
             .find_any(|replica| replica.0 == *namespace_id)
         {
             Some(replica) => Ok(replica.1),
-            None => Err(OkuFuseError::NoReplica(iroh_base::base32::fmt(namespace_id)).into()),
+            None => Err(OkuFuseError::NoReplica(crate::fs::util::fmt(namespace_id)).into()),
         }
     }
 
@@ -122,7 +122,7 @@ impl OkuFs {
         path: &Option<PathBuf>,
     ) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
-        let docs_client = self.docs_engine.client();
+        let docs_client = self.docs.client();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
             Some(path) => {
@@ -141,7 +141,7 @@ impl OkuFs {
                         let elapsed = sync_start.elapsed();
                         info!(
                             "Synchronisation took {elapsed:?} for {} … ",
-                            iroh_base::base32::fmt(namespace_id),
+                            crate::fs::util::fmt(namespace_id),
                         );
                         break;
                     }
@@ -160,7 +160,7 @@ impl OkuFs {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                iroh_base::base32::fmt(namespace_id),
+                                crate::fs::util::fmt(namespace_id),
                             );
                             break;
                         }
@@ -173,7 +173,7 @@ impl OkuFs {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                iroh_base::base32::fmt(namespace_id),
+                                crate::fs::util::fmt(namespace_id),
                             );
                             break;
                         }
@@ -203,7 +203,7 @@ impl OkuFs {
         filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<()> {
         let namespace_id = ticket.capability.id();
-        let docs_client = self.docs_engine.client();
+        let docs_client = self.docs.client();
         let replica_sender = self.replica_sender.clone();
         match path.clone() {
             Some(path) => {
@@ -224,7 +224,7 @@ impl OkuFs {
                         let elapsed = sync_start.elapsed();
                         info!(
                             "Synchronisation took {elapsed:?} for {} … ",
-                            iroh_base::base32::fmt(namespace_id),
+                            crate::fs::util::fmt(namespace_id),
                         );
                         break;
                     }
@@ -243,7 +243,7 @@ impl OkuFs {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                iroh_base::base32::fmt(namespace_id),
+                                crate::fs::util::fmt(namespace_id),
                             );
                             break;
                         }
@@ -257,7 +257,7 @@ impl OkuFs {
                             let elapsed = sync_start.elapsed();
                             info!(
                                 "Synchronisation took {elapsed:?} for {} … ",
-                                iroh_base::base32::fmt(namespace_id),
+                                crate::fs::util::fmt(namespace_id),
                             );
                             break;
                         }
@@ -278,7 +278,7 @@ impl OkuFs {
     /// * `namespace_id` - The ID of the replica to fetch.
     pub async fn sync_replica(&self, namespace_id: &NamespaceId) -> anyhow::Result<()> {
         let ticket = self.resolve_namespace_id(namespace_id).await?;
-        let docs_client = self.docs_engine.client();
+        let docs_client = self.docs.client();
         let replica_sender = self.replica_sender.clone();
         let (_replica, mut events) = docs_client.import_and_subscribe(ticket).await?;
         let sync_start = std::time::Instant::now();
@@ -287,7 +287,7 @@ impl OkuFs {
                 let elapsed = sync_start.elapsed();
                 info!(
                     "Synchronisation took {elapsed:?} for {} … ",
-                    iroh_base::base32::fmt(namespace_id),
+                    crate::fs::util::fmt(namespace_id),
                 );
                 break;
             }
@@ -321,7 +321,7 @@ impl OkuFs {
         }
         merge_tickets(&tickets).ok_or(anyhow!(
             "Could not find tickets for {} … ",
-            iroh_base::base32::fmt(namespace_id)
+            crate::fs::util::fmt(namespace_id)
         ))
     }
 
@@ -349,7 +349,7 @@ impl OkuFs {
         {
             Err(OkuFsError::CannotShareReplicaWritable(*namespace_id).into())
         } else {
-            let docs_client = &self.docs_engine.client();
+            let docs_client = &self.docs.client();
             let document = docs_client
                 .open(*namespace_id)
                 .await

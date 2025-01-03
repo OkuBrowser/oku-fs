@@ -93,7 +93,7 @@ impl From<OkuPost> for TantivyDocument {
         doc.add_bytes(POST_SCHEMA.1["id"], post_key_bytes);
         doc.add_text(
             POST_SCHEMA.1["author_id"],
-            iroh_base::base32::fmt(value.entry.author()),
+            crate::fs::util::fmt(value.entry.author()),
         );
         doc.add_text(
             POST_SCHEMA.1["path"],

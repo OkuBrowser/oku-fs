@@ -3,7 +3,7 @@ use crate::error::OkuFsError;
 use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
-use iroh_base::hash::Hash;
+use iroh_blobs::Hash;
 use iroh_docs::engine::LiveEvent;
 use iroh_docs::rpc::client::docs::Doc;
 use iroh_docs::rpc::client::docs::Entry;
@@ -33,7 +33,7 @@ impl OkuFs {
         namespace_id: &NamespaceId,
         path: &Option<PathBuf>,
     ) -> miette::Result<Vec<Entry>> {
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -79,7 +79,7 @@ impl OkuFs {
         data: impl Into<Bytes>,
     ) -> miette::Result<Hash> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -116,7 +116,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<usize> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -163,7 +163,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<Entry> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -203,7 +203,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<u64> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -363,7 +363,7 @@ impl OkuFs {
         path: &PathBuf,
         filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
-        let docs_client = &self.docs_engine.client();
+        let docs_client = &self.docs.client();
         let replica = docs_client
             .import_namespace(ticket.capability.clone())
             .await?;
@@ -382,7 +382,7 @@ impl OkuFs {
                 let elapsed = sync_start.elapsed();
                 info!(
                     "Synchronisation took {elapsed:?} for {} … ",
-                    iroh_base::base32::fmt(namespace_id),
+                    crate::fs::util::fmt(namespace_id),
                 );
                 break;
             }
