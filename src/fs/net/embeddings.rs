@@ -4,7 +4,6 @@ use iroh_docs::DocTicket;
 use miette::IntoDiagnostic;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, path::PathBuf};
-use zebra::model::core::{DIM_BGESMALL_EN_1_5, DIM_VIT_BASE_PATCH16_224};
 
 impl OkuFs {
     /// The embedding vector database for text media.
@@ -55,9 +54,7 @@ impl OkuFs {
                         EmbeddingModality::Text => {
                             text_db
                                 .insert_records(
-                                    &vec![embedding
-                                        .try_into()
-                                        .unwrap_or([0.0; DIM_BGESMALL_EN_1_5])],
+                                    &vec![embedding.try_into().unwrap_or_default()],
                                     &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;
@@ -65,9 +62,7 @@ impl OkuFs {
                         EmbeddingModality::Image => {
                             image_db
                                 .insert_records(
-                                    &vec![embedding
-                                        .try_into()
-                                        .unwrap_or([0.0; DIM_VIT_BASE_PATCH16_224])],
+                                    &vec![embedding.try_into().unwrap_or_default()],
                                     &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;
@@ -75,9 +70,7 @@ impl OkuFs {
                         EmbeddingModality::Audio => {
                             audio_db
                                 .insert_records(
-                                    &vec![embedding
-                                        .try_into()
-                                        .unwrap_or([0.0; DIM_VIT_BASE_PATCH16_224])],
+                                    &vec![embedding.try_into().unwrap_or_default()],
                                     &vec![uri.to_owned().into()],
                                 )
                                 .map_err(|e| miette::miette!("{e}"))?;

@@ -89,7 +89,7 @@ impl OkuFs {
             })?
             .ok_or(OkuFsError::FsEntryNotFound)?;
         let entry_hash = document
-            .set_bytes(self.default_author(), file_key, data)
+            .set_bytes(self.default_author().await, file_key, data)
             .await
             .map_err(|e| {
                 error!("{}", e);

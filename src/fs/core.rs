@@ -28,7 +28,7 @@ impl OkuFs {
     ///
     /// The private key of the node's authorship credentials.
     pub async fn get_author(&self) -> anyhow::Result<Author> {
-        let default_author_id = self.default_author();
+        let default_author_id = self.default_author().await;
 
         self.docs
             .client()
@@ -61,18 +61,19 @@ impl OkuFs {
             .discovery_local_network()
             .bind()
             .await?;
-        let blobs = iroh_blobs::net_protocol::Blobs::persistent(BLOBS_PATH.clone())
+        let blobs = iroh_blobs::net_protocol::Blobs::persistent(NODE_PATH.clone())
             .await?
             .build(local_pool.handle(), &endpoint);
         let gossip = iroh_gossip::net::Gossip::builder()
             .spawn(endpoint.clone())
             .await?;
-        let docs = iroh_docs::protocol::Docs::persistent(DOCS_PATH.clone())
+        let docs = iroh_docs::protocol::Docs::persistent(NODE_PATH.clone())
             .spawn(&blobs, &gossip)
             .await?;
 
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(iroh_gossip::ALPN, gossip.clone())
             .accept(iroh_docs::ALPN, docs.clone())
             .spawn()
             .await?;

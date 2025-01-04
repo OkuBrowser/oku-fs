@@ -29,8 +29,6 @@ pub mod util;
 pub const FS_PATH: &str = ".oku";
 pub(crate) static NODE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| PathBuf::from(FS_PATH).join("node"));
-pub(crate) static BLOBS_PATH: LazyLock<PathBuf> = LazyLock::new(|| NODE_PATH.join("blobs"));
-pub(crate) static DOCS_PATH: LazyLock<PathBuf> = LazyLock::new(|| NODE_PATH.join("docs.redb"));
 
 /// An instance of an Oku file system.
 ///

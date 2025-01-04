@@ -24,7 +24,6 @@ use rayon::iter::{
     FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use std::{collections::HashSet, path::Path, time::SystemTime};
-use tokio::runtime::Handle;
 
 impl OkuFs {
     /// Retrieve the content authorship ID used by the node.
@@ -32,9 +31,12 @@ impl OkuFs {
     /// # Returns
     ///
     /// The content authorship ID used by the node.
-    pub fn default_author(&self) -> AuthorId {
-        Handle::current()
-            .block_on(self.docs.client().authors().default())
+    pub async fn default_author(&self) -> AuthorId {
+        self.docs
+            .client()
+            .authors()
+            .default()
+            .await
             .unwrap_or_default()
     }
 
@@ -179,8 +181,9 @@ impl OkuFs {
     pub async fn set_identity(&self, identity: &OkuIdentity) -> miette::Result<Hash> {
         // It is not valid to follow or unfollow yourself.
         let mut validated_identity = identity.clone();
-        validated_identity.following.retain(|y| !self.is_me(y));
-        validated_identity.blocked.retain(|y| !self.is_me(y));
+        let me = self.default_author().await;
+        validated_identity.following.retain(|y| me == *y);
+        validated_identity.blocked.retain(|y| me == *y);
         // It is not valid to follow blocked people.
         validated_identity.following = validated_identity
             .following
@@ -365,8 +368,8 @@ impl OkuFs {
     /// # Returns
     ///
     /// Whether or not the user's authorship ID is the local user's.
-    pub fn is_me(&self, author_id: &AuthorId) -> bool {
-        &self.default_author() == author_id
+    pub async fn is_me(&self, author_id: &AuthorId) -> bool {
+        &self.default_author().await == author_id
     }
 
     /// Retrieves an [`OkuUser`] representing the local user.
@@ -376,7 +379,7 @@ impl OkuFs {
     /// An [`OkuUser`] representing the current user, as if it were retrieved from another Oku user's database.
     pub async fn user(&self) -> miette::Result<OkuUser> {
         Ok(OkuUser {
-            author_id: self.default_author(),
+            author_id: self.default_author().await,
             last_fetched: SystemTime::now(),
             posts: self
                 .posts()

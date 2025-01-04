@@ -10,6 +10,7 @@ use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::database::core::OkuDatabase;
 use oku_fs::fs::OkuFs;
+use rayon::iter::FromParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
@@ -62,37 +63,37 @@ enum NetCommands {
     },
     /// Unfollow a user.
     Unfollow {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author to unfollow.
         author_id: AuthorId,
     },
     /// Show a user's list of followers.
     Following {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author whose followers should be shown. If none is specified, the current user's followers will be shown.
         author_id: Option<AuthorId>,
     },
     /// Block a user.
     Block {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author to block.
         author_id: AuthorId,
     },
     /// Unblock a user.
     Unblock {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author to unblock.
         author_id: AuthorId,
     },
     /// See a user's blocked list.
     Blocked {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author whose blocked list should be shown. If none is specified, the current user's blocked list will be shown.
         author_id: Option<AuthorId>,
     },
     /// View posts in chronological order.
     Timeline {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author whose timeline should be shown. If none is specified, the main timeline will be shown.
         author_id: Option<AuthorId>,
         #[arg(short, long, value_name = "TAG")]
@@ -116,7 +117,7 @@ enum NetCommands {
     },
     /// View a post.
     View {
-        #[arg(short, long, value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, short, long, value_name = "AUTHOR_ID")]
         /// The ID of the post author. If none is specified, the author is assumed to be the current user.
         author_id: Option<AuthorId>,
         #[arg(short, long, value_name = "POST_PATH")]
@@ -146,7 +147,7 @@ enum FsCommands {
     CreateReplica,
     /// Create a new file in a replica.
     CreateFile {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to create the file in.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
@@ -158,7 +159,7 @@ enum FsCommands {
     },
     /// List files in a replica.
     ListFiles {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to list files from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
@@ -167,7 +168,7 @@ enum FsCommands {
     },
     /// Create a ticket with which a replica can be retrieved.
     Share {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to share.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "SHARE_MODE", default_value_t = ShareMode::Read)]
@@ -178,7 +179,7 @@ enum FsCommands {
     ListReplicas,
     /// Get the contents of a file in a replica.
     GetFile {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to get the file from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
@@ -187,7 +188,7 @@ enum FsCommands {
     },
     /// Remove a file from a replica.
     RemoveFile {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to remove the file from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
@@ -196,7 +197,7 @@ enum FsCommands {
     },
     /// Remove a directory from a replica.
     RemoveDirectory {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to remove the directory from.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH")]
@@ -205,19 +206,19 @@ enum FsCommands {
     },
     /// Remove a replica from the node.
     RemoveReplica {
-        #[arg(value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, value_name = "REPLICA_ID")]
         /// The ID of the replica to remove.
         replica_id: NamespaceId,
     },
     /// Move a file from one path to another in a replica.
     MoveFile {
-        #[arg(short, long, value_name = "OLD_REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "OLD_REPLICA_ID")]
         /// The ID of the replica containing the file to move.
         old_replica_id: NamespaceId,
         #[arg(short, long, value_name = "OLD_PATH")]
         /// The path of the file to move.
         old_path: PathBuf,
-        #[arg(short, long, value_name = "NEW_REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "NEW_REPLICA_ID")]
         /// The ID of the replica to move the file to.
         new_replica_id: NamespaceId,
         #[arg(short, long, value_name = "NEW_PATH")]
@@ -226,13 +227,13 @@ enum FsCommands {
     },
     /// Move a directory from one path to another in a replica.
     MoveDirectory {
-        #[arg(short, long, value_name = "OLD_REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "OLD_REPLICA_ID")]
         /// The ID of the replica containing the directory to move.
         old_replica_id: NamespaceId,
         #[arg(short, long, value_name = "OLD_PATH")]
         /// The path of the directory to move.
         old_path: PathBuf,
-        #[arg(short, long, value_name = "NEW_REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "NEW_REPLICA_ID")]
         /// The ID of the replica to move the directory to.
         new_replica_id: NamespaceId,
         #[arg(short, long, value_name = "NEW_PATH")]
@@ -241,7 +242,7 @@ enum FsCommands {
     },
     /// Get a replica from other nodes by its ID.
     GetReplicaById {
-        #[arg(short, long, value_name = "REPLICA_ID")]
+        #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to get.
         replica_id: NamespaceId,
         #[arg(short, long, value_name = "PATH", default_missing_value = None)]
@@ -264,6 +265,14 @@ enum FsCommands {
         /// The path of the directory to mount the filesystem in.
         path: PathBuf,
     },
+}
+
+fn parse_namespace_id(value: &str) -> miette::Result<NamespaceId> {
+    oku_fs::fs::util::parse_array_hex_or_base32(value).map(NamespaceId::from)
+}
+
+fn parse_author_id(value: &str) -> miette::Result<AuthorId> {
+    oku_fs::fs::util::parse_array_hex_or_base32(value).map(AuthorId::from)
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -301,7 +310,10 @@ pub async fn main() -> miette::Result<()> {
         })) => match command {
             FsCommands::CreateReplica => {
                 let replica_id = node.create_replica().await?;
-                info!("Created replica with ID: {}", replica_id);
+                info!(
+                    "Created replica with ID: {}",
+                    oku_fs::fs::util::fmt(replica_id)
+                );
             }
             FsCommands::CreateFile {
                 replica_id,
@@ -455,7 +467,7 @@ pub async fn main() -> miette::Result<()> {
             }
             NetCommands::Timeline { author_id, tags } => {
                 let mut posts = match author_id {
-                    None => node.posts().await.unwrap_or_default(),
+                    None => Vec::from_par_iter(node.all_posts().await),
                     Some(id) => node
                         .posts_from_user(&node.get_or_fetch_user(&id).await?)
                         .await
