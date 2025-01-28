@@ -55,6 +55,8 @@ struct Net {
 
 #[derive(Subcommand)]
 enum NetCommands {
+    /// Shows the current user's profile.
+    Me,
     /// Sets the current user's home replica.
     SetHome {
         #[arg(value_parser = parse_namespace_id, value_name = "REPLICA_ID")]
@@ -439,6 +441,29 @@ pub async fn main() -> miette::Result<()> {
         Some(Commands::Net(Net {
             net_commands: command,
         })) => match command {
+            NetCommands::Me => {
+                let identity = node.identity().await;
+                let display_name = identity.clone().map(|x| x.name);
+                let following = identity.clone().map(|x| x.following).unwrap_or_default();
+                let blocked = identity.map(|x| x.blocked).unwrap_or_default();
+                let mut following_names = Vec::new();
+                let mut blocked_names = Vec::new();
+
+                for author_id in following {
+                    following_names.push(util::name(&node, &author_id).await);
+                }
+                for author_id in blocked {
+                    blocked_names.push(util::name(&node, &author_id).await);
+                }
+
+                println!("Home replica: {:?}\nAuthor ID: {}\nDisplay name: {:?}\nFollowing: {:?}\nBlocked: {:?}\n", node.home_replica().await.map(oku_fs::fs::util::fmt), oku_fs::fs::util::fmt(node.default_author().await), display_name, following_names, blocked_names);
+
+                let mut posts = node.posts().await.unwrap_or_default();
+                posts.par_sort_unstable_by_key(|x| Reverse(x.entry.timestamp()));
+                for post in posts {
+                    println!("⮞ {}", util::post(&post).await);
+                }
+            }
             NetCommands::SetHome { replica_id } => {
                 node.set_home_replica(&replica_id)?;
                 println!(
