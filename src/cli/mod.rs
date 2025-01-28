@@ -57,6 +57,18 @@ struct Net {
 enum NetCommands {
     /// Shows the current user's profile.
     Me,
+    /// Import a user from a file.
+    Import {
+        #[arg(value_name = "PATH")]
+        /// Path to import a user from.
+        path: PathBuf,
+    },
+    /// Export the current user to a file.
+    Export {
+        #[arg(value_name = "PATH")]
+        /// Path to export a user to.
+        path: PathBuf,
+    },
     /// Sets the current user's home replica.
     SetHome {
         #[arg(value_parser = parse_namespace_id, value_name = "REPLICA_ID")]
@@ -441,6 +453,16 @@ pub async fn main() -> miette::Result<()> {
         Some(Commands::Net(Net {
             net_commands: command,
         })) => match command {
+            NetCommands::Import { path } => {
+                let exported_user_toml = std::fs::read_to_string(&path).into_diagnostic()?;
+                node.import_user_toml(&exported_user_toml).await?;
+                println!("Import current user from {path:?} … ");
+            }
+            NetCommands::Export { path } => {
+                let exported_user_toml = node.export_user_toml().await?;
+                std::fs::write(&path, exported_user_toml).into_diagnostic()?;
+                println!("Exported current user to {path:?} … ");
+            }
             NetCommands::Me => {
                 let identity = node.identity().await;
                 let display_name = identity.clone().map(|x| x.name);
