@@ -55,9 +55,21 @@ struct Net {
 
 #[derive(Subcommand)]
 enum NetCommands {
+    /// Sets the current user's home replica.
+    SetHome {
+        #[arg(value_parser = parse_namespace_id, value_name = "REPLICA_ID")]
+        /// The ID of the new home replica; if unspecified, no home replica is set.
+        replica_id: Option<NamespaceId>,
+    },
+    /// Sets the current user's display name.
+    SetName {
+        #[arg(value_name = "DISPLAY_NAME")]
+        /// The new display name to use.
+        display_name: String,
+    },
     /// Follow a user.
     Follow {
-        #[arg(value_name = "AUTHOR_ID")]
+        #[arg(value_parser = parse_author_id, value_name = "AUTHOR_ID")]
         /// The ID of the author to follow.
         author_id: AuthorId,
     },
@@ -360,7 +372,10 @@ pub async fn main() -> miette::Result<()> {
             }
             FsCommands::RemoveReplica { replica_id } => {
                 node.delete_replica(&replica_id).await?;
-                info!("Removed replica with ID: {}", replica_id);
+                info!(
+                    "Removed replica with ID: {}",
+                    oku_fs::fs::util::fmt(replica_id)
+                );
             }
             FsCommands::MoveFile {
                 old_replica_id,
@@ -372,7 +387,10 @@ pub async fn main() -> miette::Result<()> {
                     .await?;
                 info!(
                     "Moved file from {:?} in {} to {:?} in {}",
-                    old_path, old_replica_id, new_path, new_replica_id
+                    old_path,
+                    oku_fs::fs::util::fmt(old_replica_id),
+                    new_path,
+                    oku_fs::fs::util::fmt(new_replica_id)
                 );
             }
             FsCommands::MoveDirectory {
@@ -385,7 +403,10 @@ pub async fn main() -> miette::Result<()> {
                     .await?;
                 info!(
                     "Moved directory from {:?} in {} to {:?} in {}",
-                    old_path, old_replica_id, new_path, new_replica_id
+                    old_path,
+                    oku_fs::fs::util::fmt(old_replica_id),
+                    new_path,
+                    oku_fs::fs::util::fmt(new_replica_id)
                 );
             }
             FsCommands::GetReplicaById { replica_id, path } => {
@@ -418,6 +439,17 @@ pub async fn main() -> miette::Result<()> {
         Some(Commands::Net(Net {
             net_commands: command,
         })) => match command {
+            NetCommands::SetHome { replica_id } => {
+                node.set_home_replica(&replica_id)?;
+                println!(
+                    "Home replica set to {:?} … ",
+                    replica_id.map(oku_fs::fs::util::fmt)
+                );
+            }
+            NetCommands::SetName { display_name } => {
+                node.set_display_name(&display_name).await?;
+                println!("Display name set to {:?} … ", display_name);
+            }
             NetCommands::Follow { author_id } => {
                 node.follow(&author_id).await?;
                 println!("Now following {} … ", util::name(&node, &author_id).await);
