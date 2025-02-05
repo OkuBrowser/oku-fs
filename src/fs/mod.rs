@@ -1,9 +1,9 @@
 use iroh_blobs::net_protocol::Blobs;
-use iroh_blobs::util::local_pool::LocalPool;
 use iroh_docs::protocol::Docs;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(feature = "fuse")]
 use std::sync::Arc;
 use std::sync::LazyLock;
 #[cfg(feature = "fuse")]
@@ -35,7 +35,6 @@ pub(crate) static NODE_PATH: LazyLock<PathBuf> =
 /// The `OkuFs` struct is the primary interface for interacting with an Oku file system.
 #[derive(Clone, Debug)]
 pub struct OkuFs {
-    pub(crate) local_pool: Arc<LocalPool>,
     pub(crate) endpoint: iroh::Endpoint,
     pub(crate) blobs: Blobs<iroh_blobs::store::fs::Store>,
     pub(crate) docs: Docs<iroh_blobs::store::fs::Store>,

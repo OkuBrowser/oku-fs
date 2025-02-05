@@ -54,7 +54,6 @@ impl OkuFs {
     ///
     /// A running instance of an Oku file system.
     pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> anyhow::Result<Self> {
-        let local_pool = Arc::new(iroh_blobs::util::local_pool::LocalPool::default());
         let endpoint = iroh::Endpoint::builder()
             .discovery_n0()
             .discovery_dht()
@@ -63,7 +62,7 @@ impl OkuFs {
             .await?;
         let blobs = iroh_blobs::net_protocol::Blobs::persistent(NODE_PATH.clone())
             .await?
-            .build(local_pool.handle(), &endpoint);
+            .build(&endpoint);
         let gossip = iroh_gossip::net::Gossip::builder()
             .spawn(endpoint.clone())
             .await?;
@@ -86,7 +85,6 @@ impl OkuFs {
         let (okunet_fetch_sender, _okunet_fetch_receiver) = watch::channel(false);
 
         let oku_fs = Self {
-            local_pool,
             endpoint,
             blobs,
             docs,
@@ -126,9 +124,6 @@ impl OkuFs {
         self.docs.shutdown().await;
         self.blobs.shutdown().await;
         self.blobs.store().shutdown().await;
-        if let Some(local_pool) = Arc::into_inner(self.local_pool) {
-            local_pool.shutdown().await
-        }
     }
 
     /// Retrieve the content of a document entry.
