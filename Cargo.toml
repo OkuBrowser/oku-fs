@@ -59,6 +59,8 @@ data-encoding = "2.7.0"
 hex = "0.4.3"
 jiff = { version = "0.1.29", optional = true }
 dashmap = "6.1.0"
+tree_magic_mini = { version = "3.1.6", features = ["with-gpl-data"] }
+serde_json = "1.0.138"
 
 [features]
 default = []
