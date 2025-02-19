@@ -36,7 +36,13 @@ pub async fn post(post: &OkuPost) -> String {
             .unwrap_or(timestamp_microseconds as i64),
     )
     .unwrap_or(Timestamp::UNIX_EPOCH);
-    let span = Timestamp::now() - timestamp;
+    let timestamp_string = jiff::fmt::rfc2822::DateTimePrinter::new()
+        .timestamp_to_string(&timestamp)
+        .unwrap_or(format!("{timestamp:.0}"));
+    let unrounded_span = timestamp - Timestamp::now();
+    let span = unrounded_span
+        .round(jiff::SpanRound::new().largest(jiff::Unit::Year).smallest(jiff::Unit::Second))
+        .unwrap_or(unrounded_span);
     let timestamp_printer = SpanPrinter::new()
         .direction(jiff::fmt::friendly::Direction::Suffix)
         .precision(Some(0))
@@ -44,10 +50,11 @@ pub async fn post(post: &OkuPost) -> String {
         .comma_after_designator(true)
         .designator(Designator::Verbose);
     format!(
-        "'{}' ({}) by {} (posted {}):\n{}\nTags: {:?}",
+        "'{}' ({}) by {} (posted on {}, {}):\n{}\nTags: {:?}",
         post.note.title,
         post.note.url,
         user_name(&user),
+        timestamp_string,
         timestamp_printer.span_to_string(&span),
         post.note.body,
         post.note.tags

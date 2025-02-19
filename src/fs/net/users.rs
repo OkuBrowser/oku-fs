@@ -182,8 +182,8 @@ impl OkuFs {
         // It is not valid to follow or unfollow yourself.
         let mut validated_identity = identity.clone();
         let me = self.default_author().await;
-        validated_identity.following.retain(|y| me == *y);
-        validated_identity.blocked.retain(|y| me == *y);
+        validated_identity.following.retain(|y| me != *y);
+        validated_identity.blocked.retain(|y| me != *y);
         // It is not valid to follow blocked people.
         validated_identity.following = validated_identity
             .following
