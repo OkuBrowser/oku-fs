@@ -41,7 +41,11 @@ pub async fn post(post: &OkuPost) -> String {
         .unwrap_or(format!("{timestamp:.0}"));
     let unrounded_span = timestamp - Timestamp::now();
     let span = unrounded_span
-        .round(jiff::SpanRound::new().largest(jiff::Unit::Year).smallest(jiff::Unit::Second))
+        .round(
+            jiff::SpanRound::new()
+                .largest(jiff::Unit::Year)
+                .smallest(jiff::Unit::Second),
+        )
         .unwrap_or(unrounded_span);
     let timestamp_printer = SpanPrinter::new()
         .direction(jiff::fmt::friendly::Direction::Suffix)

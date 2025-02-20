@@ -1,4 +1,5 @@
 use super::core::home_replica_filters;
+use crate::fs::util::entry_key_to_path;
 use crate::{
     database::{
         core::DATABASE,
@@ -38,6 +39,11 @@ impl OkuFs {
         Some(
             post_files
                 .par_iter()
+                .filter(|(entry, _)| {
+                    entry_key_to_path(entry.key())
+                        .map(|x| matches!(x.extension(), Some(y) if y == "okupost"))
+                        .unwrap_or(false)
+                })
                 .filter_map(|(entry, bytes)| {
                     toml::from_str::<OkuNote>(String::from_utf8_lossy(bytes).as_ref())
                         .ok()
@@ -279,7 +285,7 @@ impl OkuFs {
                 let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
                 let mut embedding_path = path.clone();
-                embedding_path.set_extension("embed");
+                embedding_path.set_extension("okuembed");
                 if let Err(e) = self
                     .fetch_post_embeddings(&ticket, &embedding_path, note.url.as_ref())
                     .await

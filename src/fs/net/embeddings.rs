@@ -3,6 +3,7 @@ use crate::{database::posts::core::OkuNote, fs::OkuFs};
 use bytes::Bytes;
 use iroh_blobs::Hash;
 use iroh_docs::DocTicket;
+use log::error;
 use miette::IntoDiagnostic;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
@@ -78,15 +79,23 @@ impl OkuFs {
             .home_replica()
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
-        let post_path = match path {
+        let embed_path = match path {
             Some(given_path) => given_path,
             None => &{
                 let mut path: PathBuf =
                     OkuNote::suggested_post_path_from_url(&url.to_string()).into();
-                path.set_extension("embed");
+                path.set_extension("okuembed");
                 path
             },
         };
+        let mut archive_path = embed_path.clone();
+        archive_path.set_extension("okuarchive");
+        if let Err(e) = self
+            .create_or_modify_file(&home_replica_id, &archive_path, bytes.clone())
+            .await
+        {
+            error!("{e}");
+        }
         match self.bytes_to_embedding_modality(bytes)? {
             EmbeddingModality::Audio => {
                 let model = DefaultAudioModel::default();
@@ -94,7 +103,7 @@ impl OkuFs {
                     .embed(bytes.clone())
                     .map_err(|e| miette::miette!("{e}"))?;
                 let embedding_json = serde_json::to_string(&embedding).into_diagnostic()?;
-                self.create_or_modify_file(&home_replica_id, post_path, embedding_json)
+                self.create_or_modify_file(&home_replica_id, embed_path, embedding_json)
                     .await
             }
             EmbeddingModality::Image => {
@@ -103,7 +112,7 @@ impl OkuFs {
                     .embed(bytes.clone())
                     .map_err(|e| miette::miette!("{e}"))?;
                 let embedding_json = serde_json::to_string(&embedding).into_diagnostic()?;
-                self.create_or_modify_file(&home_replica_id, post_path, embedding_json)
+                self.create_or_modify_file(&home_replica_id, embed_path, embedding_json)
                     .await
             }
             EmbeddingModality::Text => {
@@ -112,7 +121,7 @@ impl OkuFs {
                     .embed(bytes.clone())
                     .map_err(|e| miette::miette!("{e}"))?;
                 let embedding_json = serde_json::to_string(&embedding).into_diagnostic()?;
-                self.create_or_modify_file(&home_replica_id, post_path, embedding_json)
+                self.create_or_modify_file(&home_replica_id, embed_path, embedding_json)
                     .await
             }
         }
@@ -213,40 +222,49 @@ impl OkuFs {
         path: &PathBuf,
         uri: &str,
     ) -> miette::Result<()> {
-        if let Ok(bytes) = self
+        let mut archive_path = path.clone();
+        archive_path.set_extension("okuarchive");
+        if let Ok(embedding_bytes) = self
             .fetch_file_with_ticket(ticket, path, &Some(home_replica_filters()))
             .await
         {
-            match self.bytes_to_embedding_modality(&bytes)? {
-                EmbeddingModality::Audio => {
-                    let embedding = serde_json::from_str::<Embedding<DIM_VIT_BASE_PATCH16_224>>(
-                        String::from_utf8_lossy(&bytes).as_ref(),
-                    )
-                    .into_diagnostic()?;
-                    let db = self.audio_database();
-                    db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                        .map_err(|e| miette::miette!("{e}"))?;
-                    db.index.deduplicate().map_err(|e| miette::miette!("{e}"))?;
-                }
-                EmbeddingModality::Image => {
-                    let embedding = serde_json::from_str::<Embedding<DIM_VIT_BASE_PATCH16_224>>(
-                        String::from_utf8_lossy(&bytes).as_ref(),
-                    )
-                    .into_diagnostic()?;
-                    let db = self.image_database();
-                    db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                        .map_err(|e| miette::miette!("{e}"))?;
-                    db.index.deduplicate().map_err(|e| miette::miette!("{e}"))?;
-                }
-                EmbeddingModality::Text => {
-                    let embedding = serde_json::from_str::<Embedding<DIM_BGESMALL_EN_1_5>>(
-                        String::from_utf8_lossy(&bytes).as_ref(),
-                    )
-                    .into_diagnostic()?;
-                    let db = self.text_database();
-                    db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                        .map_err(|e| miette::miette!("{e}"))?;
-                    db.index.deduplicate().map_err(|e| miette::miette!("{e}"))?;
+            if let Ok(bytes) = self
+                .fetch_file_with_ticket(ticket, &archive_path, &Some(home_replica_filters()))
+                .await
+            {
+                match self.bytes_to_embedding_modality(&bytes)? {
+                    EmbeddingModality::Audio => {
+                        let embedding =
+                            serde_json::from_str::<Embedding<DIM_VIT_BASE_PATCH16_224>>(
+                                String::from_utf8_lossy(&embedding_bytes).as_ref(),
+                            )
+                            .into_diagnostic()?;
+                        let db = self.audio_database();
+                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
+                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
+                    }
+                    EmbeddingModality::Image => {
+                        let embedding =
+                            serde_json::from_str::<Embedding<DIM_VIT_BASE_PATCH16_224>>(
+                                String::from_utf8_lossy(&embedding_bytes).as_ref(),
+                            )
+                            .into_diagnostic()?;
+                        let db = self.image_database();
+                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
+                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
+                    }
+                    EmbeddingModality::Text => {
+                        let embedding = serde_json::from_str::<Embedding<DIM_BGESMALL_EN_1_5>>(
+                            String::from_utf8_lossy(&embedding_bytes).as_ref(),
+                        )
+                        .into_diagnostic()?;
+                        let db = self.text_database();
+                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
+                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
+                    }
                 }
             }
         }
