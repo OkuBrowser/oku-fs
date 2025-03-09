@@ -33,5 +33,12 @@ pub enum EmbeddingModality {
 pub fn home_replica_filters() -> Vec<FilterKind> {
     let profile_filter = FilterKind::Exact(path_to_entry_key(&"/profile.toml".into()));
     let posts_filter = FilterKind::Prefix(path_to_entry_prefix(&"/posts/".into()));
-    vec![profile_filter, posts_filter]
+    let archives_filter = FilterKind::Prefix(path_to_entry_prefix(&"/archives/".into()));
+    let embeddings_filter = FilterKind::Prefix(path_to_entry_prefix(&"/embeddings/".into()));
+    vec![
+        profile_filter,
+        posts_filter,
+        archives_filter,
+        embeddings_filter,
+    ]
 }

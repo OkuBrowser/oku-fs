@@ -516,7 +516,7 @@ pub async fn main() -> miette::Result<()> {
             } => {
                 let tags = tags.unwrap_or_default().into_par_iter().collect();
                 let hash = node
-                    .create_or_modify_post(&None, &url, &title.unwrap_or_default(), &body, &tags)
+                    .create_or_modify_post(&url, &title.unwrap_or_default(), &body, &tags)
                     .await?;
                 println!(
                     "{:#?}",

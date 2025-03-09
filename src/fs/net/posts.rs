@@ -41,7 +41,7 @@ impl OkuFs {
                 .par_iter()
                 .filter(|(entry, _)| {
                     entry_key_to_path(entry.key())
-                        .map(|x| matches!(x.extension(), Some(y) if y == "okupost"))
+                        .map(|x| matches!(x.extension(), Some(y) if y == "toml"))
                         .unwrap_or(false)
                 })
                 .filter_map(|(entry, bytes)| {
@@ -211,7 +211,6 @@ impl OkuFs {
     /// A hash of the post's content.
     pub async fn create_or_modify_post(
         &self,
-        path: &Option<PathBuf>,
         url: &Url,
         title: &String,
         body: &String,
@@ -227,10 +226,7 @@ impl OkuFs {
             body: body.to_string(),
             tags: tags.clone(),
         };
-        let post_path = match path {
-            Some(given_path) => given_path,
-            None => &new_note.suggested_post_path().into(),
-        };
+        let post_path = &new_note.post_path().into();
         self.create_or_modify_file(
             &home_replica_id,
             post_path,
@@ -284,8 +280,7 @@ impl OkuFs {
             Ok(bytes) => {
                 let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
-                let mut embedding_path = path.clone();
-                embedding_path.set_extension("okuembed");
+                let embedding_path: PathBuf = note.embedding_path().into();
                 if let Err(e) = self
                     .fetch_post_embeddings(&ticket, &embedding_path, note.url.as_ref())
                     .await

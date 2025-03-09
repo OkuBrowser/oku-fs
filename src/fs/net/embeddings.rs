@@ -20,18 +20,36 @@ use zebra::{
 
 impl OkuFs {
     /// The embedding vector database for text media.
-    pub fn text_database(&self) -> zebra::database::default::text::DefaultTextDatabase {
-        zebra::database::default::text::DefaultTextDatabase::open_or_create(&"text.zebra".into())
+    pub fn text_database(
+        &self,
+    ) -> miette::Result<zebra::database::default::text::DefaultTextDatabase> {
+        zebra::database::default::text::DefaultTextDatabase::open_or_create(
+            &"text.zebra".into(),
+            &Default::default(),
+        )
+        .map_err(|e| miette::miette!("{e}"))
     }
 
     /// The embedding vector database for image media.
-    pub fn image_database(&self) -> zebra::database::default::image::DefaultImageDatabase {
-        zebra::database::default::image::DefaultImageDatabase::open_or_create(&"image.zebra".into())
+    pub fn image_database(
+        &self,
+    ) -> miette::Result<zebra::database::default::image::DefaultImageDatabase> {
+        zebra::database::default::image::DefaultImageDatabase::open_or_create(
+            &"image.zebra".into(),
+            &Default::default(),
+        )
+        .map_err(|e| miette::miette!("{e}"))
     }
 
     /// The embedding vector database for audio media.
-    pub fn audio_database(&self) -> zebra::database::default::audio::DefaultAudioDatabase {
-        zebra::database::default::audio::DefaultAudioDatabase::open_or_create(&"audio.zebra".into())
+    pub fn audio_database(
+        &self,
+    ) -> miette::Result<zebra::database::default::audio::DefaultAudioDatabase> {
+        zebra::database::default::audio::DefaultAudioDatabase::open_or_create(
+            &"audio.zebra".into(),
+            &Default::default(),
+        )
+        .map_err(|e| miette::miette!("{e}"))
     }
 
     /// Determine the modality of some data.
@@ -69,29 +87,16 @@ impl OkuFs {
     /// # Returns
     ///
     /// The hash of the file.
-    pub async fn create_post_embedding(
-        &self,
-        path: &Option<PathBuf>,
-        url: &Url,
-        bytes: &Bytes,
-    ) -> miette::Result<Hash> {
+    pub async fn create_post_embedding(&self, url: &Url, bytes: &Bytes) -> miette::Result<Hash> {
         let home_replica_id = self
             .home_replica()
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
-        let embed_path = match path {
-            Some(given_path) => given_path,
-            None => &{
-                let mut path: PathBuf =
-                    OkuNote::suggested_post_path_from_url(&url.to_string()).into();
-                path.set_extension("okuembed");
-                path
-            },
-        };
-        let mut archive_path = embed_path.clone();
-        archive_path.set_extension("okuarchive");
+        let url_string = url.to_string();
+        let embed_path: &PathBuf = &OkuNote::embedding_path_from_url(&url_string).into();
+        let archive_path: &PathBuf = &OkuNote::archive_path_from_url(&url_string).into();
         if let Err(e) = self
-            .create_or_modify_file(&home_replica_id, &archive_path, bytes.clone())
+            .create_or_modify_file(&home_replica_id, archive_path, bytes.clone())
             .await
         {
             error!("{e}");
@@ -145,7 +150,7 @@ impl OkuFs {
     ) -> miette::Result<Vec<Url>> {
         match self.bytes_to_embedding_modality(bytes)? {
             EmbeddingModality::Audio => {
-                let db = self.audio_database();
+                let db = self.audio_database()?;
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
@@ -165,7 +170,7 @@ impl OkuFs {
                     .collect())
             }
             EmbeddingModality::Image => {
-                let db = self.image_database();
+                let db = self.image_database()?;
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
@@ -185,7 +190,7 @@ impl OkuFs {
                     .collect())
             }
             EmbeddingModality::Text => {
-                let db = self.text_database();
+                let db = self.text_database()?;
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
@@ -222,14 +227,13 @@ impl OkuFs {
         path: &PathBuf,
         uri: &str,
     ) -> miette::Result<()> {
-        let mut archive_path = path.clone();
-        archive_path.set_extension("okuarchive");
+        let archive_path: &PathBuf = &OkuNote::archive_path_from_url(&uri.to_string()).into();
         if let Ok(embedding_bytes) = self
             .fetch_file_with_ticket(ticket, path, &Some(home_replica_filters()))
             .await
         {
             if let Ok(bytes) = self
-                .fetch_file_with_ticket(ticket, &archive_path, &Some(home_replica_filters()))
+                .fetch_file_with_ticket(ticket, archive_path, &Some(home_replica_filters()))
                 .await
             {
                 match self.bytes_to_embedding_modality(&bytes)? {
@@ -239,7 +243,7 @@ impl OkuFs {
                                 String::from_utf8_lossy(&embedding_bytes).as_ref(),
                             )
                             .into_diagnostic()?;
-                        let db = self.audio_database();
+                        let db = self.audio_database()?;
                         db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
                             .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
@@ -250,7 +254,7 @@ impl OkuFs {
                                 String::from_utf8_lossy(&embedding_bytes).as_ref(),
                             )
                             .into_diagnostic()?;
-                        let db = self.image_database();
+                        let db = self.image_database()?;
                         db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
                             .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
@@ -260,7 +264,7 @@ impl OkuFs {
                             String::from_utf8_lossy(&embedding_bytes).as_ref(),
                         )
                         .into_diagnostic()?;
-                        let db = self.text_database();
+                        let db = self.text_database()?;
                         db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
                             .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;

@@ -184,16 +184,36 @@ pub struct OkuNote {
 }
 
 impl OkuNote {
-    /// Generate a suggested post path for the note.
-    pub fn suggested_post_path(&self) -> String {
-        Self::suggested_post_path_from_url(&self.url.to_string())
+    /// Generate a post path for the note.
+    pub fn post_path(&self) -> String {
+        Self::post_path_from_url(&self.url.to_string())
     }
 
-    /// Generate a suggested post path using a URL.
-    pub fn suggested_post_path_from_url(url: &String) -> String {
+    /// Generate a post path using a URL.
+    pub fn post_path_from_url(url: &String) -> String {
+        format!("/posts/{}.toml", bs58::encode(url.as_bytes()).into_string())
+    }
+
+    /// Generate an embedding path for the note.
+    pub fn embedding_path(&self) -> String {
+        Self::embedding_path_from_url(&self.url.to_string())
+    }
+
+    /// Generate an archive path for the note.
+    pub fn archive_path(&self) -> String {
+        Self::archive_path_from_url(&self.url.to_string())
+    }
+
+    /// Generate an embedding path using a URL.
+    pub fn embedding_path_from_url(url: &String) -> String {
         format!(
-            "/posts/{}.okupost",
+            "/embeddings/{}.json",
             bs58::encode(url.as_bytes()).into_string()
         )
+    }
+
+    /// Generate an archive path using a URL.
+    pub fn archive_path_from_url(url: &String) -> String {
+        format!("/archives/{}", bs58::encode(url.as_bytes()).into_string())
     }
 }
