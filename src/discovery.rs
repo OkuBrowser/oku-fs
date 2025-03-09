@@ -26,11 +26,10 @@ impl OkuFs {
         &self,
         namespace_id: &NamespaceId,
     ) -> miette::Result<NamespaceId> {
-        let ticket = mainline::Bytes::from(
-            self.create_document_ticket(namespace_id, &ShareMode::Read)
-                .await?
-                .to_bytes(),
-        );
+        let ticket = self
+            .create_document_ticket(namespace_id, &ShareMode::Read)
+            .await?
+            .to_bytes();
         let newest_timestamp = self
             .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
             .await? as i64;
@@ -44,8 +43,8 @@ impl OkuFs {
                 .to_bytes(),
         );
         let mutable_item =
-            mainline::MutableItem::new(replica_private_key, ticket, newest_timestamp, None);
-        match self.dht.put_mutable(mutable_item).await {
+            mainline::MutableItem::new(replica_private_key, &ticket, newest_timestamp, None);
+        match self.dht.put_mutable(mutable_item, None).await {
             Ok(_) => info!(
                 "Announced mutable replica {} … ",
                 crate::fs::util::fmt(namespace_id)
@@ -84,11 +83,10 @@ impl OkuFs {
                 crate::fs::util::fmt(namespace_id)
             ))?;
 
-        let ticket = mainline::Bytes::from(
-            self.create_document_ticket(namespace_id, &ShareMode::Read)
-                .await?
-                .to_bytes(),
-        );
+        let ticket = self
+            .create_document_ticket(namespace_id, &ShareMode::Read)
+            .await?
+            .to_bytes();
         let newest_timestamp = self
             .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
             .await? as i64;
@@ -99,11 +97,11 @@ impl OkuFs {
             announcement.signature.try_into().map_err(|_e| {
                 miette::miette!("Replica announcement signature does not fit into 64 bytes … ")
             })?,
-            ticket,
+            &ticket,
             newest_timestamp,
             None,
         );
-        match self.dht.put_mutable(mutable_item).await {
+        match self.dht.put_mutable(mutable_item, None).await {
             Ok(_) => info!(
                 "Announced immutable replica {} … ",
                 crate::fs::util::fmt(namespace_id)
@@ -143,11 +141,10 @@ impl OkuFs {
             .home_replica()
             .await
             .ok_or(miette::miette!("No home replica set … "))?;
-        let ticket = mainline::Bytes::from(
-            self.create_document_ticket(&home_replica, &ShareMode::Read)
-                .await?
-                .to_bytes(),
-        );
+        let ticket = self
+            .create_document_ticket(&home_replica, &ShareMode::Read)
+            .await?
+            .to_bytes();
         let newest_timestamp = self
             .get_newest_timestamp_in_folder(&home_replica, &PathBuf::from("/"))
             .await? as i64;
@@ -159,8 +156,8 @@ impl OkuFs {
                 .to_bytes(),
         );
         let mutable_item =
-            mainline::MutableItem::new(author_private_key, ticket, newest_timestamp, None);
-        match self.dht.put_mutable(mutable_item).await {
+            mainline::MutableItem::new(author_private_key, &ticket, newest_timestamp, None);
+        match self.dht.put_mutable(mutable_item, None).await {
             Ok(_) => info!(
                 "Announced home replica {} … ",
                 crate::fs::util::fmt(home_replica)

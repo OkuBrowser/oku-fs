@@ -378,7 +378,6 @@ dependencies = [
  "instant",
  "pin-project-lite",
  "rand 0.8.5",
- "tokio",
 ]
 
 [[package]]
@@ -2538,9 +2537,9 @@ dependencies = [
 
 [[package]]
 name = "hickory-proto"
-version = "0.25.0-alpha.4"
+version = "0.25.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d063c0692ee669aa6d261988aa19ca5510f1cc40e4f211024f50c888499a35d7"
+checksum = "1d00147af6310f4392a31680db52a3ed45a2e0f68eb18e8c3fe5537ecc96d9e2"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2553,7 +2552,7 @@ dependencies = [
  "idna",
  "ipnet",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.9.0",
  "thiserror 2.0.11",
  "tinyvec",
  "tokio",
@@ -2563,9 +2562,9 @@ dependencies = [
 
 [[package]]
 name = "hickory-resolver"
-version = "0.25.0-alpha.4"
+version = "0.25.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42bc352e4412fb657e795f79b4efcf2bd60b59ee5ca0187f3554194cd1107a27"
+checksum = "5762f69ebdbd4ddb2e975cd24690bf21fe6b2604039189c26acddbc427f12887"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -2574,7 +2573,7 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.9.0",
  "resolv-conf",
  "smallvec",
  "thiserror 2.0.11",
@@ -3115,9 +3114,9 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "iroh"
-version = "0.32.1"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91c24924bd438e7d0218f7d98aaa6476042137bf785cc03dcd15d2bf96c5b89"
+checksum = "a4ffd6af2e000f04972068c0318e0d8fa90ee9cfcb2bc6124db38591500e0278"
 dependencies = [
  "aead",
  "anyhow",
@@ -3125,6 +3124,7 @@ dependencies = [
  "axum",
  "backoff",
  "bytes",
+ "cfg_aliases",
  "concurrent-queue",
  "crypto_box",
  "data-encoding",
@@ -3132,13 +3132,10 @@ dependencies = [
  "derive_more",
  "ed25519-dalek",
  "futures-util",
- "governor",
  "hickory-resolver",
  "http 1.2.0",
- "http-body-util",
- "hyper",
- "hyper-util",
  "igd-next",
+ "instant",
  "iroh-base",
  "iroh-metrics",
  "iroh-net-report",
@@ -3164,12 +3161,13 @@ dependencies = [
  "stun-rs",
  "swarm-discovery",
  "thiserror 2.0.11",
+ "time",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tracing",
  "url",
+ "wasm-bindgen-futures",
  "webpki-roots",
  "x509-parser",
  "z32",
@@ -3177,9 +3175,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d56b4a9e4db1e505710d0aaca2afc17dd92aeac2dd06a34ccf9934dab7240bc9"
+checksum = "011d271a95b41218d22bdaf3352f29ef1dd7d6be644ca8543941655bec5f3d35"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -3208,9 +3206,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-blobs"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da38a62138561d5ab6bd67439961017dbd0b2a808e7d0a81bb81dbc53f7f8c60"
+checksum = "96cb8430c257cd42b2da9f94bc7e72912b182e760ab5c7fdbecd250d51de5e44"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3236,8 +3234,8 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "postcard",
- "quic-rpc 0.18.1",
- "quic-rpc-derive 0.17.3",
+ "quic-rpc",
+ "quic-rpc-derive",
  "rand 0.8.5",
  "range-collections",
  "redb 2.4.0",
@@ -3260,9 +3258,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-docs"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e6e6c4838584c56d43db11efe49268a964152b6787c7494698560ace598a9e4"
+checksum = "c8a034141176f1930952f12d7f4b10fccf66a04d86e870af825739a43344c493"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3283,8 +3281,8 @@ dependencies = [
  "num_enum",
  "portable-atomic",
  "postcard",
- "quic-rpc 0.18.1",
- "quic-rpc-derive 0.18.1",
+ "quic-rpc",
+ "quic-rpc-derive",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "redb 1.5.1",
@@ -3303,9 +3301,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-gossip"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3ea3b0c1ba4868fa65039839881b33826cd0546177fd55c77e9058fb13890c9"
+checksum = "b3d4c7e330bf3d29576d443003e31a2d30d97b29ee13521af2634926d831c01d"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3320,6 +3318,7 @@ dependencies = [
  "iroh",
  "iroh-blake3",
  "iroh-metrics",
+ "n0-future",
  "postcard",
  "rand 0.8.5",
  "rand_core 0.6.4",
@@ -3329,7 +3328,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-test",
 ]
 
 [[package]]
@@ -3366,12 +3364,13 @@ dependencies = [
 
 [[package]]
 name = "iroh-net-report"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6043244fda74da51f46c6199ff7f7e1c350d58b650e39983ae24ca4cfd46f4be"
+checksum = "7d2652f42eadc63458e36c0a422569f338639dc0b5bb469db0eb4a382b4e295c"
 dependencies = [
  "anyhow",
  "bytes",
+ "cfg_aliases",
  "derive_more",
  "hickory-resolver",
  "iroh-base",
@@ -3449,9 +3448,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0700bfc2dcd5d6b28a9176dddbc989a6c90b06fc49e9e60069213408450ab47"
+checksum = "c930ccc4dfd0196b531344e3d0f83a0f82c45b170406e04a2491cba571faec5b"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3471,10 +3470,11 @@ dependencies = [
  "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
- "lru",
+ "lru 0.12.5",
  "n0-future",
  "num_enum",
  "pin-project",
+ "pkarr",
  "postcard",
  "rand 0.8.5",
  "rcgen",
@@ -3487,8 +3487,10 @@ dependencies = [
  "rustls-pemfile",
  "rustls-webpki",
  "serde",
+ "strum",
  "stun-rs",
  "thiserror 2.0.11",
+ "time",
  "tokio",
  "tokio-rustls",
  "tokio-rustls-acme",
@@ -3500,6 +3502,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "webpki-roots",
+ "z32",
 ]
 
 [[package]]
@@ -3540,16 +3543,28 @@ checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
 
 [[package]]
 name = "jiff"
-version = "0.1.29"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c04ef77ae73f3cf50510712722f0c4e8b46f5aaa1bf5ffad2ae213e6495e78e5"
+checksum = "5c163c633eb184a4ad2a5e7a5dacf12a58c830d717a7963563d4eceb4ced079f"
 dependencies = [
+ "jiff-static",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc3e0019b0f5f43038cf46471b1312136f29e36f54436c6042c8f155fec8789"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
 ]
 
 [[package]]
@@ -3757,6 +3772,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "227748d55f2f0ab4735d87fd623798cb6b664512fe979705f829c9f81c934465"
+
+[[package]]
 name = "lsm-tree"
 version = "2.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3815,7 +3836,7 @@ dependencies = [
  "crc",
  "ed25519-dalek",
  "flume",
- "lru",
+ "lru 0.12.5",
  "rand 0.8.5",
  "serde",
  "serde_bencode",
@@ -3827,17 +3848,18 @@ dependencies = [
 
 [[package]]
 name = "mainline"
-version = "4.2.1"
+version = "5.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b07af976738dc609f6c82fa65841c677809d72ec0faaa9ec96dba7b1daeaf591"
+checksum = "2fae24c3d129b92c8cfea92a9e2014052371a2835e4a6d66dfdb00238e389e56"
 dependencies = [
- "bytes",
  "crc",
  "document-features",
+ "dyn-clone",
  "ed25519-dalek",
  "flume",
- "lru",
- "rand 0.8.5",
+ "futures-lite",
+ "getrandom 0.2.15",
+ "lru 0.13.0",
  "serde",
  "serde_bencode",
  "serde_bytes",
@@ -4545,7 +4567,7 @@ dependencies = [
  "jiff",
  "libc",
  "log",
- "mainline 4.2.1",
+ "mainline 5.3.1",
  "miette",
  "native_db",
  "native_model",
@@ -4929,7 +4951,7 @@ dependencies = [
  "flume",
  "futures",
  "js-sys",
- "lru",
+ "lru 0.12.5",
  "mainline 2.0.1",
  "self_cell",
  "simple-dns",
@@ -5347,28 +5369,6 @@ dependencies = [
 
 [[package]]
 name = "quic-rpc"
-version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8649f6353ef952672f35ddaf586c1a57152373f3d5b0767c5140b08f2d7ec6f8"
-dependencies = [
- "anyhow",
- "document-features",
- "flume",
- "futures-lite",
- "futures-sink",
- "futures-util",
- "pin-project",
- "serde",
- "slab",
- "smallvec",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "quic-rpc"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09b61cd874b52a79146069fc15456f5cf7abafea818e2fdd828598456349d6a4"
@@ -5391,24 +5391,12 @@ dependencies = [
 
 [[package]]
 name = "quic-rpc-derive"
-version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a32e88a525c7616b2bfce4be94a875eeac46bf20faea5e580cb54dc739e64e5"
-dependencies = [
- "proc-macro2",
- "quic-rpc 0.17.3",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "quic-rpc-derive"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d94974ee26d4e97acfab1fd55df2a1ca676af24021a08354ed1c42b70a39e914"
 dependencies = [
  "proc-macro2",
- "quic-rpc 0.18.1",
+ "quic-rpc",
  "quote",
  "syn 1.0.109",
 ]
@@ -6901,9 +6889,9 @@ dependencies = [
 
 [[package]]
 name = "swarm-discovery"
-version = "0.3.0-alpha.1"
+version = "0.3.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b529764e2f746ef954505dd7cb3c03331bd678c52a387e4a86540577f41e45"
+checksum = "6406a372c38c426a841d2c1095204dfb259229e3ab8080b1c4102f8966bedfcd"
 dependencies = [
  "acto",
  "anyhow",
@@ -7190,7 +7178,7 @@ dependencies = [
  "itertools 0.12.1",
  "levenshtein_automata",
  "log",
- "lru",
+ "lru 0.12.5",
  "lz4_flex",
  "measure_time",
  "memmap2",
@@ -7438,6 +7426,7 @@ checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
 dependencies = [
  "deranged",
  "itoa",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde",

@@ -469,7 +469,7 @@ impl OkuFs {
     /// A ticket for the home replica of the user with the given content authorship ID.
     pub async fn resolve_author_id(&self, author_id: &AuthorId) -> anyhow::Result<DocTicket> {
         self.okunet_fetch_sender.send_replace(true);
-        let get_stream = self.dht.get_mutable(author_id.as_bytes(), None, None)?;
+        let get_stream = self.dht.get_mutable(author_id.as_bytes(), None, None);
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {

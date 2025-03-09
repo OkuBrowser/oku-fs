@@ -309,7 +309,7 @@ impl OkuFs {
         &self,
         namespace_id: &NamespaceId,
     ) -> anyhow::Result<DocTicket> {
-        let get_stream = self.dht.get_mutable(namespace_id.as_bytes(), None, None)?;
+        let get_stream = self.dht.get_mutable(namespace_id.as_bytes(), None, None);
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {

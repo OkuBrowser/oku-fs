@@ -31,13 +31,16 @@ clap = { version = "4.5.28", features = ["derive"], optional = true }
 fuse_mt = { version = "0.6.1", optional = true }
 fuser = { version = "0.13.0", optional = true }
 futures = "0.3.31"
-iroh = { version = "0.32.1", features = ["discovery-local-network", "discovery-pkarr-dht"] }
-iroh-docs = { version = "0.32.0", features = ["rpc"] }
-iroh-base = "0.32.0"
-iroh-blobs = "0.32.0"
-iroh-gossip = "0.32.0"
+iroh = { version = "0.33.0", features = [
+    "discovery-local-network",
+    "discovery-pkarr-dht",
+] }
+iroh-docs = { version = "0.33.0", features = ["rpc"] }
+iroh-base = "0.33.0"
+iroh-blobs = "0.33.0"
+iroh-gossip = "0.33.0"
 libc = { version = "0.2.169", optional = true }
-mainline = { version = "4.2.1", features = ["async"] }
+mainline = { version = "5.3.1", features = ["async"] }
 miette = { version = "7.5.0", features = ["fancy"] }
 path-clean = "1.0.1"
 thiserror = "2.0.11"
@@ -53,11 +56,13 @@ toml = "0.8.20"
 rayon = "1.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 tantivy = "0.22.0"
-zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = ["default_db"]}
+zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = [
+    "default_db",
+] }
 # zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
 data-encoding = "2.7.0"
 hex = "0.4.3"
-jiff = { version = "0.1.29", optional = true }
+jiff = { version = "0.2.3", optional = true }
 dashmap = "6.1.0"
 tree_magic_mini = { version = "3.1.6", features = ["with-gpl-data"] }
 serde_json = "1.0.138"
