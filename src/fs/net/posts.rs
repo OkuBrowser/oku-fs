@@ -280,9 +280,8 @@ impl OkuFs {
             Ok(bytes) => {
                 let note = toml::from_str::<OkuNote>(String::from_utf8_lossy(&bytes).as_ref())
                     .into_diagnostic()?;
-                let embedding_path: PathBuf = note.embedding_path().into();
                 if let Err(e) = self
-                    .fetch_post_embeddings(&ticket, &embedding_path, note.url.as_ref())
+                    .fetch_post_embeddings(&ticket, author_id, note.url.as_ref())
                     .await
                 {
                     error!("{e}")

@@ -2,11 +2,11 @@ use super::core::{home_replica_filters, EmbeddingModality};
 use crate::{database::posts::core::OkuNote, fs::OkuFs};
 use bytes::Bytes;
 use iroh_blobs::Hash;
+use iroh_docs::AuthorId;
 use iroh_docs::DocTicket;
 use log::error;
 use miette::IntoDiagnostic;
 use rayon::iter::IntoParallelIterator;
-use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use std::path::PathBuf;
 use url::Url;
@@ -132,41 +132,37 @@ impl OkuFs {
         }
     }
 
-    /// Find the URLs of the most similar documents.
+    /// Find the archival records of the most similar documents.
     ///
     /// # Arguments
     ///
     /// * `bytes` - A document.
     ///
-    /// * `number_of_results` - The maximum number of URLs to return.
+    /// * `number_of_results` - The maximum number of archives to return.
     ///
     /// # Returns
     ///
-    /// The URLs of the documents most similar to the given one, approximately.
-    pub fn nearest_urls(
+    /// The URIs of the documents approximately most similar to the given one, paired with their archivist's authorship ID.
+    pub fn nearest_archives(
         &self,
         bytes: &Bytes,
         number_of_results: usize,
-    ) -> miette::Result<Vec<Url>> {
+    ) -> miette::Result<Vec<(AuthorId, String)>> {
         match self.bytes_to_embedding_modality(bytes)? {
             EmbeddingModality::Audio => {
                 let db = self.audio_database()?;
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
-                let result_strings: Vec<String> = results
+                Ok(results
                     .into_read_only()
                     .into_par_iter()
                     .flat_map(|(_x, y)| {
                         y.into_read_only()
                             .into_par_iter()
-                            .map(|(_a, b)| String::from_utf8_lossy(&b).to_string())
+                            .filter_map(|(_a, b)| serde_json::from_slice(&b).ok())
                             .collect::<Vec<_>>()
                     })
-                    .collect();
-                Ok(result_strings
-                    .par_iter()
-                    .filter_map(|x| Url::parse(x).ok())
                     .collect())
             }
             EmbeddingModality::Image => {
@@ -174,19 +170,15 @@ impl OkuFs {
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
-                let result_strings: Vec<String> = results
+                Ok(results
                     .into_read_only()
                     .into_par_iter()
                     .flat_map(|(_x, y)| {
                         y.into_read_only()
                             .into_par_iter()
-                            .map(|(_a, b)| String::from_utf8_lossy(&b).to_string())
+                            .filter_map(|(_a, b)| serde_json::from_slice(&b).ok())
                             .collect::<Vec<_>>()
                     })
-                    .collect();
-                Ok(result_strings
-                    .par_iter()
-                    .filter_map(|x| Url::parse(x).ok())
                     .collect())
             }
             EmbeddingModality::Text => {
@@ -194,19 +186,15 @@ impl OkuFs {
                 let results = db
                     .query_documents(&[bytes.clone()], number_of_results)
                     .map_err(|e| miette::miette!("{e}"))?;
-                let result_strings: Vec<String> = results
+                Ok(results
                     .into_read_only()
                     .into_par_iter()
                     .flat_map(|(_x, y)| {
                         y.into_read_only()
                             .into_par_iter()
-                            .map(|(_a, b)| String::from_utf8_lossy(&b).to_string())
+                            .filter_map(|(_a, b)| serde_json::from_slice(&b).ok())
                             .collect::<Vec<_>>()
                     })
-                    .collect();
-                Ok(result_strings
-                    .par_iter()
-                    .filter_map(|x| Url::parse(x).ok())
                     .collect())
             }
         }
@@ -224,9 +212,10 @@ impl OkuFs {
     pub async fn fetch_post_embeddings(
         &self,
         ticket: &DocTicket,
-        path: &PathBuf,
+        author_id: &AuthorId,
         uri: &str,
     ) -> miette::Result<()> {
+        let path: &PathBuf = &OkuNote::embedding_path_from_url(&uri.to_string()).into();
         let archive_path: &PathBuf = &OkuNote::archive_path_from_url(&uri.to_string()).into();
         if let Ok(embedding_bytes) = self
             .fetch_file_with_ticket(ticket, path, &Some(home_replica_filters()))
@@ -244,8 +233,13 @@ impl OkuFs {
                             )
                             .into_diagnostic()?;
                         let db = self.audio_database()?;
-                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.insert_records(
+                            &vec![embedding],
+                            &vec![serde_json::to_string(&(author_id, uri))
+                                .into_diagnostic()?
+                                .into()],
+                        )
+                        .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
                     }
                     EmbeddingModality::Image => {
@@ -255,8 +249,13 @@ impl OkuFs {
                             )
                             .into_diagnostic()?;
                         let db = self.image_database()?;
-                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.insert_records(
+                            &vec![embedding],
+                            &vec![serde_json::to_string(&(author_id, uri))
+                                .into_diagnostic()?
+                                .into()],
+                        )
+                        .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
                     }
                     EmbeddingModality::Text => {
@@ -265,13 +264,36 @@ impl OkuFs {
                         )
                         .into_diagnostic()?;
                         let db = self.text_database()?;
-                        db.insert_records(&vec![embedding], &vec![uri.to_owned().into()])
-                            .map_err(|e| miette::miette!("{e}"))?;
+                        db.insert_records(
+                            &vec![embedding],
+                            &vec![serde_json::to_string(&(author_id, uri))
+                                .into_diagnostic()?
+                                .into()],
+                        )
+                        .map_err(|e| miette::miette!("{e}"))?;
                         db.deduplicate().map_err(|e| miette::miette!("{e}"))?;
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Fetch an archived copy of a document.
+    ///
+    /// # Arguments
+    ///
+    /// * `author_id` - The authorship ID of the OkuNet user who archived the document.
+    ///
+    /// * `uri` - The URI of the document.
+    ///
+    /// # Returns
+    ///
+    /// The archived copy of the document.
+    pub async fn fetch_archive(&self, author_id: &AuthorId, uri: &str) -> anyhow::Result<Bytes> {
+        let path: &PathBuf = &OkuNote::archive_path_from_url(&uri.to_string()).into();
+        let ticket = self.resolve_author_id(author_id).await?;
+        self.fetch_file_with_ticket(&ticket, path, &Some(home_replica_filters()))
+            .await
     }
 }

@@ -59,7 +59,9 @@ tantivy = "0.22.0"
 zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = [
     "default_db",
 ] }
-# zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = ["default_db"]}
+# zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = [
+#     "default_db",
+# ] }
 data-encoding = "2.7.0"
 hex = "0.4.3"
 jiff = { version = "0.2.3", optional = true }
