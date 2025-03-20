@@ -38,6 +38,7 @@ pub struct OkuFs {
     pub(crate) endpoint: iroh::Endpoint,
     pub(crate) blobs: Blobs<iroh_blobs::store::fs::Store>,
     pub(crate) docs: Docs<iroh_blobs::store::fs::Store>,
+    pub(crate) willow: iroh_willow::engine::Engine,
     pub(crate) router: iroh::protocol::Router,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     /// A watcher for when replicas are created, deleted, or imported.

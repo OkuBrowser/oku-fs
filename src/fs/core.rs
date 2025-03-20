@@ -69,6 +69,18 @@ impl OkuFs {
         let docs = iroh_docs::protocol::Docs::persistent(NODE_PATH.clone())
             .spawn(&blobs, &gossip)
             .await?;
+        let blobs_clone = blobs.clone();
+        let willow = iroh_willow::Engine::spawn(
+            endpoint.clone(),
+            move || {
+                iroh_willow::store::persistent::Store::new(
+                    NODE_PATH.clone(),
+                    blobs_clone.store().clone(),
+                )
+                .unwrap()
+            },
+            Default::default(),
+        );
 
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
@@ -88,6 +100,7 @@ impl OkuFs {
             endpoint,
             blobs,
             docs,
+            willow,
             router,
             replica_sender,
             okunet_fetch_sender,
