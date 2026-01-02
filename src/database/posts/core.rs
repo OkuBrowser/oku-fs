@@ -90,7 +90,7 @@ impl From<OkuPost> for TantivyDocument {
         let post_key_bytes = post_key.concat();
 
         let mut doc = TantivyDocument::default();
-        doc.add_bytes(POST_SCHEMA.1["id"], post_key_bytes);
+        doc.add_bytes(POST_SCHEMA.1["id"], &post_key_bytes);
         doc.add_text(
             POST_SCHEMA.1["author_id"],
             crate::fs::util::fmt(value.entry.author()),

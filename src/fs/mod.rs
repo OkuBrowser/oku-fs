@@ -1,13 +1,13 @@
+#[cfg(feature = "fuse")]
+use debug_ignore::DebugIgnore;
+#[cfg(feature = "fuse")]
+use easy_fuser::templates::DefaultFuseHandler;
 use iroh_blobs::net_protocol::Blobs;
 use iroh_docs::protocol::Docs;
-#[cfg(feature = "fuse")]
-use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
 use std::sync::Arc;
 use std::sync::LazyLock;
-#[cfg(feature = "fuse")]
-use std::sync::RwLock;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use tokio::sync::watch::Sender;
@@ -38,7 +38,6 @@ pub struct OkuFs {
     pub(crate) endpoint: iroh::Endpoint,
     pub(crate) blobs: Blobs<iroh_blobs::store::fs::Store>,
     pub(crate) docs: Docs<iroh_blobs::store::fs::Store>,
-    pub(crate) willow: iroh_willow::engine::Engine,
     pub(crate) router: iroh::protocol::Router,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     /// A watcher for when replicas are created, deleted, or imported.
@@ -46,11 +45,7 @@ pub struct OkuFs {
     /// A watcher for whether or not content is being fetched from the OkuNet.
     pub okunet_fetch_sender: Sender<bool>,
     #[cfg(feature = "fuse")]
-    /// The handles pointing to paths within the file system; used by FUSE.
-    pub(crate) fs_handles: Arc<RwLock<HashMap<u64, PathBuf>>>,
-    #[cfg(feature = "fuse")]
-    /// The latest file system handle created.
-    pub(crate) newest_handle: Arc<RwLock<u64>>,
+    pub(crate) fuse_handler: DebugIgnore<Arc<DefaultFuseHandler>>,
     #[cfg(feature = "fuse")]
     /// A Tokio runtime handle to perform asynchronous operations with.
     pub(crate) handle: Handle,

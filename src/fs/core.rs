@@ -1,8 +1,6 @@
 use super::*;
 use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
 use bytes::Bytes;
-#[cfg(feature = "fuse")]
-use fuse_mt::spawn_mount;
 use iroh::protocol::ProtocolHandler;
 use iroh_blobs::store::Store;
 use iroh_docs::Author;
@@ -10,13 +8,7 @@ use log::{error, info};
 #[cfg(feature = "fuse")]
 use miette::IntoDiagnostic;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-#[cfg(feature = "fuse")]
-use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(feature = "fuse")]
-use std::sync::Arc;
-#[cfg(feature = "fuse")]
-use std::sync::RwLock;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use tokio::sync::watch::{self};
@@ -69,18 +61,6 @@ impl OkuFs {
         let docs = iroh_docs::protocol::Docs::persistent(NODE_PATH.clone())
             .spawn(&blobs, &gossip)
             .await?;
-        let blobs_clone = blobs.clone();
-        let willow = iroh_willow::Engine::spawn(
-            endpoint.clone(),
-            move || {
-                iroh_willow::store::persistent::Store::new(
-                    NODE_PATH.clone(),
-                    blobs_clone.store().clone(),
-                )
-                .unwrap()
-            },
-            Default::default(),
-        );
 
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
@@ -100,14 +80,11 @@ impl OkuFs {
             endpoint,
             blobs,
             docs,
-            willow,
             router,
             replica_sender,
             okunet_fetch_sender,
             #[cfg(feature = "fuse")]
-            fs_handles: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(feature = "fuse")]
-            newest_handle: Arc::new(RwLock::new(0)),
+            fuse_handler: DebugIgnore::from(Arc::new(DefaultFuseHandler::new())),
             #[cfg(feature = "fuse")]
             handle: handle.clone(),
             dht: mainline::Dht::server()?.as_async(),
@@ -224,6 +201,6 @@ impl OkuFs {
     ///
     /// A handle referencing the mounted file system; joining or dropping the handle will unmount the file system and shutdown the node.
     pub fn mount(&self, path: PathBuf) -> miette::Result<fuser::BackgroundSession> {
-        spawn_mount(fuse_mt::FuseMT::new(self.clone(), 1), path, &[]).into_diagnostic()
+        easy_fuser::spawn_mount(self.clone(), path, &vec![], 4).into_diagnostic()
     }
 }
