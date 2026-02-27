@@ -24,13 +24,13 @@ required-features = ["cli"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bytes = "1.11.0"
+bytes = "1.11.1"
 cfg-if = "1.0.4"
-chrono = "0.4.42"
-clap = { version = "4.5.53", features = ["derive"], optional = true }
+chrono = "0.4.44"
+clap = { version = "4.5.60", features = ["derive"], optional = true }
 fuse_mt = { version = "0.6.3", optional = true }
 fuser = { version = "0.16.0", features = ["libfuse"], optional = true }
-futures = "0.3.31"
+futures = "0.3.32"
 iroh = { version = "0.34.0", features = [
     "discovery-local-network",
     "discovery-pkarr-dht",
@@ -40,22 +40,22 @@ iroh-base = "0.34.0"
 # iroh-blobs = "0.34.0"
 iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs", branch = "matheus23/verified-streams" }
 iroh-gossip = "0.34.0"
-libc = { version = "0.2.178", optional = true }
-mainline = { version = "6.0.1", features = ["async"] }
+libc = { version = "0.2.182", optional = true }
+mainline = { version = "6.1.1", features = ["async"] }
 miette = { version = "7.6.0", features = ["fancy"] }
 path-clean = "1.0.1"
-thiserror = "2.0.17"
-tokio = "1.48.0"
-env_logger = { version = "0.11.8", optional = true }
+thiserror = "2.0.18"
+tokio = "1.49.0"
+env_logger = { version = "0.11.9", optional = true }
 log = "0.4.29"
 bs58 = "0.5.1"
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 native_db = "0.8.2"
 native_model = "0.4.20"
 serde = "1.0.228"
-toml = "0.9.10"
+toml = "0.9.8"
 rayon = "1.11.0"
-url = { version = "2.5.7", features = ["serde"] }
+url = { version = "2.5.8", features = ["serde"] }
 tantivy = "0.25.0"
 zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features = [
     "default_db",
@@ -63,12 +63,12 @@ zebra = { git = "https://github.com/emmyoh/zebra", version = "0.1.0", features =
 # zebra = { path = "/home/emil/Documents/GitHub/zebra", version = "0.1.0", features = [
 #     "default_db",
 # ] }
-data-encoding = "2.9.0"
+data-encoding = "2.10.0"
 hex = "0.4.3"
-jiff = { version = "0.2.17", optional = true }
+jiff = { version = "0.2.21", optional = true }
 dashmap = "6.1.0"
 tree_magic_mini = { version = "3.2.2", features = ["with-gpl-data"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 easy_fuser = { version = "0.4.5", features = ["parallel", "deadlock_detection"], optional = true }
 debug-ignore = "1.0.5"
 
