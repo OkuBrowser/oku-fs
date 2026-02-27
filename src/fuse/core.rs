@@ -372,15 +372,20 @@ impl FuseHandler<PathBuf> for OkuFs {
 
     fn rename(
         &self,
-        req: &RequestInfo,
+        _req: &RequestInfo,
         parent_id: PathBuf,
         name: &OsStr,
         newparent: PathBuf,
         newname: &OsStr,
         flags: RenameFlags,
     ) -> FuseResult<()> {
-        self.get_inner()
-            .rename(req, parent_id, name, newparent, newname, flags)
+        let parent_id = normalise_path(&parent_id);
+        debug!("[rename] parent_id = {parent_id:?}, name = {name:?}, newparent = {newparent:?}, newname = {newname:?}, flags = {flags:?}");
+        self.rename(parent_id, name, newparent, newname)
+            .map_err(|e| {
+                error!("[rename]: {e}");
+                PosixError::new(ErrorKind::FileNotFound, e.to_string())
+            })
     }
 
     fn setattr(

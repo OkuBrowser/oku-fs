@@ -6,6 +6,7 @@ use log::info;
 use miette::IntoDiagnostic;
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::fs::FileType;
 use std::io::Read;
 use std::io::Seek;
 use std::path::PathBuf;
@@ -106,5 +107,54 @@ impl OkuFs {
             file_attr,
             FUSEOpenResponseFlags::empty(),
         ))
+    }
+
+    pub(super) fn rename(
+        &self,
+        parent_id: PathBuf,
+        name: &OsStr,
+        newparent: PathBuf,
+        newname: &OsStr,
+    ) -> miette::Result<()> {
+        let old_path = parent_id.join(name);
+        let path_type = self
+            .handle
+            .block_on(async { self.is_file_or_directory(&old_path).await })?;
+        let new_path = newparent.join(newname);
+        let (old_namespace_id, old_replica_path) = parse_fuse_path(&old_path)
+            .map(|x| x.ok_or(miette::miette!("Cannot rename root directory")))??;
+        let (new_namespace_id, new_replica_path) = parse_fuse_path(&new_path)
+            .map(|x| x.ok_or(miette::miette!("Cannot rename root directory")))??;
+        match path_type {
+            fuser::FileType::RegularFile => {
+                let (new_hash, files_moved) = self.handle.block_on(async {
+                    self.move_file(
+                        &old_namespace_id,
+                        &old_replica_path,
+                        &new_namespace_id,
+                        &new_replica_path,
+                    )
+                    .await
+                })?;
+                info!("File {old_path:?} moved to {new_path:?} (files moved: {files_moved}, new hash: {new_hash})");
+                Ok(())
+            }
+            fuser::FileType::Directory => {
+                let (new_hashes, files_moved) = self.handle.block_on(async {
+                    self.move_directory(
+                        &old_namespace_id,
+                        &old_replica_path,
+                        &new_namespace_id,
+                        &new_replica_path,
+                    )
+                    .await
+                })?;
+                info!("Directory {old_path:?} moved to {new_path:?} (files moved: {files_moved}, new hashes: {new_hashes:?})");
+                Ok(())
+            }
+            _ => Err(miette::miette!(
+                "File system entry type {path_type:?} at {old_path:?} not supported"
+            )),
+        }
     }
 }
