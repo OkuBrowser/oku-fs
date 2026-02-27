@@ -15,6 +15,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+/// Returns whether or not the given path is the root path.
+///
+/// # Arguments
+///
+/// * `path` - The path to check.
+///
+/// # Returns
+///
+/// `true` if the path is empty or `/`, `false` otherwise.
+pub fn is_root_path(path: &Path) -> bool {
+    path.is_empty() || path == &PathBuf::from("/")
+}
+
 /// Parse a FUSE path to retrieve the replica and path.
 ///
 /// # Arguments
@@ -108,14 +121,14 @@ impl OkuFs {
         let parsed_path = parse_fuse_path(path)?;
         if let Some((namespace_id, replica_path)) = parsed_path {
             if self.get_entry(&namespace_id, &replica_path).await.is_ok()
-                && replica_path != PathBuf::from("/")
+                && !is_root_path(&replica_path)
             {
                 Ok(RegularFile)
             } else {
                 match path.parent() {
                     Some(parent_path) => {
                         let parent_path_buf = parent_path.to_path_buf();
-                        if parent_path_buf == PathBuf::from("/") {
+                        if is_root_path(&parent_path_buf) {
                             // The children of the root are the replica directories
                             Ok(Directory)
                         } else {
@@ -254,7 +267,7 @@ impl OkuFs {
                 }
                 _ => unreachable!(),
             }
-        } else if path.to_path_buf() == PathBuf::from("/") {
+        } else if is_root_path(path) {
             let root_creation_time_estimate = self.get_oldest_timestamp().await?;
             let root_modification_time_estimate = self.get_newest_timestamp().await?;
             let root_size_estimate = self.get_size().await?;

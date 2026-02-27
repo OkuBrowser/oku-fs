@@ -184,3 +184,4 @@ tree.txt
 test/
 *_old.rs
 .idea
+test_mount/

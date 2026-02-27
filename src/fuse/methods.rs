@@ -63,7 +63,7 @@ impl OkuFs {
         let path = parent_id.join(name);
         let (namespace_id, replica_path) = parse_fuse_path(&path)
             .map(|x| x.ok_or(miette::miette!("Cannot remove root directory")))??;
-        match replica_path == PathBuf::from("/") {
+        match is_root_path(&replica_path) {
             true => {
                 self.handle
                     .block_on(async { self.delete_replica(&namespace_id).await })?;

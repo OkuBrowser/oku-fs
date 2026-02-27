@@ -6,7 +6,16 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use std::ffi::CString;
 use std::path::PathBuf;
 
-pub(super) fn normalise_path(path: &PathBuf) -> PathBuf {
+/// Cleans a path and ensures it begins with the root.
+///
+/// # Arguments
+///
+/// * `path` - The path to normalise.
+///
+/// # Returns
+///
+/// The given path, prefixed with `/` if missing, and `.` & `..` components processed.
+pub fn normalise_path(path: &PathBuf) -> PathBuf {
     PathBuf::from("/").join(path).clean()
 }
 

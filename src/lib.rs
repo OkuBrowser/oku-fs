@@ -1,3 +1,4 @@
+#![feature(path_is_empty)]
 #![doc = include_str!("../README.md")]
 // #![feature(doc_auto_cfg)]
 #![warn(missing_docs)]
