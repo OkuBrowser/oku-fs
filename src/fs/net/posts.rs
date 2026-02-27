@@ -10,7 +10,7 @@ use crate::{
 };
 use dashmap::DashMap;
 use iroh_blobs::Hash;
-use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::sync::Entry;
 use iroh_docs::AuthorId;
 use log::error;
 use miette::IntoDiagnostic;

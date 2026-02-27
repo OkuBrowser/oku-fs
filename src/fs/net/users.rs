@@ -12,13 +12,13 @@ use crate::{
 };
 use anyhow::anyhow;
 use futures::StreamExt;
-use iroh_base::ticket::Ticket;
 use iroh_blobs::Hash;
-use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::api::protocol::ShareMode;
 use iroh_docs::sync::CapabilityKind;
 use iroh_docs::AuthorId;
 use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
+use iroh_tickets::Ticket;
 use miette::IntoDiagnostic;
 use rayon::iter::{
     FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
@@ -32,12 +32,7 @@ impl OkuFs {
     ///
     /// The content authorship ID used by the node.
     pub async fn default_author(&self) -> AuthorId {
-        self.docs
-            .client()
-            .authors()
-            .default()
-            .await
-            .unwrap_or_default()
+        self.docs.author_default().await.unwrap_or_default()
     }
 
     /// Exports the local Oku user's credentials.
@@ -69,15 +64,11 @@ impl OkuFs {
     /// * `exported_user` - Oku user credentials, which contain sensitive information.
     pub async fn import_user(&self, exported_user: &ExportedUser) -> miette::Result<()> {
         self.docs
-            .client()
-            .authors()
-            .import(exported_user.author.clone())
+            .author_import(exported_user.author.clone())
             .await
             .map_err(|e| miette::miette!("{}", e))?;
         self.docs
-            .client()
-            .authors()
-            .set_default(exported_user.author.id())
+            .author_set_default(exported_user.author.id())
             .await
             .map_err(|e| miette::miette!("{}", e))?;
         match (

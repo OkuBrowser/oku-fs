@@ -1,6 +1,6 @@
 use super::core::*;
 use super::posts::core::OkuPost;
-use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::sync::Entry;
 use iroh_docs::AuthorId;
 use log::error;
 use miette::IntoDiagnostic;

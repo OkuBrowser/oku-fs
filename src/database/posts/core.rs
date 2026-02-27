@@ -1,7 +1,7 @@
 use super::super::core::*;
 use super::super::users::*;
 use crate::fs::FS_PATH;
-use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::sync::Entry;
 use iroh_docs::AuthorId;
 use native_db::*;
 use native_model::{native_model, Model};

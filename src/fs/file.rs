@@ -4,10 +4,10 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{pin_mut, StreamExt};
 use iroh_blobs::Hash;
+use iroh_docs::api::Doc;
 use iroh_docs::engine::LiveEvent;
-use iroh_docs::rpc::client::docs::Doc;
-use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::store::FilterKind;
+use iroh_docs::sync::Entry;
 use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
 use log::{error, info};
@@ -33,7 +33,7 @@ impl OkuFs {
         namespace_id: &NamespaceId,
         path: &Option<PathBuf>,
     ) -> miette::Result<Vec<Entry>> {
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -79,7 +79,7 @@ impl OkuFs {
         data: impl Into<Bytes>,
     ) -> miette::Result<Hash> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -116,7 +116,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<usize> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -163,7 +163,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<Entry> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -203,7 +203,7 @@ impl OkuFs {
         path: &PathBuf,
     ) -> miette::Result<u64> {
         let file_key = path_to_entry_key(path);
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await
@@ -363,7 +363,7 @@ impl OkuFs {
         path: &PathBuf,
         filters: &Option<Vec<FilterKind>>,
     ) -> anyhow::Result<Bytes> {
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let replica = docs_client
             .import_namespace(ticket.capability.clone())
             .await?;

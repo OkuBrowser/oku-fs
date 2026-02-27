@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use env_logger::Builder;
-use iroh_base::ticket::Ticket;
-use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::api::protocol::ShareMode;
 use iroh_docs::AuthorId;
 use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
+use iroh_tickets::Ticket;
 use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
 use oku_fs::database::core::OkuDatabase;
@@ -17,11 +17,48 @@ use rayon::slice::ParallelSliceMut;
 use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use url::Url;
 
 mod util;
+
+#[derive(Clone)]
+enum ShareModeSerializable {
+    Read,
+    Write,
+}
+
+impl ToString for ShareModeSerializable {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Read => "Read".into(),
+            Self::Write => "Write".into(),
+        }
+    }
+}
+
+impl FromStr for ShareModeSerializable {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Read" => Ok(Self::Read),
+            "Write" => Ok(Self::Write),
+            _ => Err(anyhow::anyhow!("Unexpected share mode")),
+        }
+    }
+}
+
+impl Into<ShareMode> for ShareModeSerializable {
+    fn into(self) -> ShareMode {
+        match self {
+            Self::Read => ShareMode::Read,
+            Self::Write => ShareMode::Write,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -197,9 +234,9 @@ enum FsCommands {
         #[arg(value_parser = parse_namespace_id, short, long, value_name = "REPLICA_ID")]
         /// The ID of the replica to share.
         replica_id: NamespaceId,
-        #[arg(short, long, value_name = "SHARE_MODE", default_value_t = ShareMode::Read)]
+        #[arg(short, long, value_name = "SHARE_MODE", default_value_t = ShareModeSerializable::Read)]
         /// Whether the replica should be shared as read-only, or if read & write permissions are to be shared.
-        share_mode: ShareMode,
+        share_mode: ShareModeSerializable,
     },
     /// List local replicas.
     ListReplicas,
@@ -358,7 +395,7 @@ pub async fn main() -> miette::Result<()> {
                 share_mode,
             } => {
                 let ticket = node
-                    .create_document_ticket(&replica_id, &share_mode)
+                    .create_document_ticket(&replica_id, &share_mode.into())
                     .await?;
                 println!("{}", ticket.serialize());
             }

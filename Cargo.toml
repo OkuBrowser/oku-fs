@@ -9,6 +9,7 @@ repository = "https://github.com/emmyoh/oku-fs/"
 documentation = "https://emmyoh.github.io/oku-fs/oku_fs/"
 license = "AGPL-3.0-or-later"
 default-run = "oku-fs"
+resolver = "3"
 
 [lib]
 name = "oku_fs"
@@ -31,17 +32,19 @@ clap = { version = "4.5.60", features = ["derive"], optional = true }
 fuse_mt = { version = "0.6.3", optional = true }
 fuser = { version = "0.16.0", features = ["libfuse"], optional = true }
 futures = "0.3.32"
-iroh = { version = "0.34.0", features = [
-    "discovery-local-network",
-    "discovery-pkarr-dht",
+iroh = { version = "0.96.1", features = [
+    "address-lookup-mdns",
+    "address-lookup-pkarr-dht",
+    "default",
+    "fast-apple-datapath"
 ] }
-iroh-docs = { version = "0.34.0", features = ["rpc"] }
-iroh-base = "0.34.0"
-# iroh-blobs = "0.34.0"
-iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs", branch = "matheus23/verified-streams" }
-iroh-gossip = "0.34.0"
+iroh-docs = { version = "0.96.0", features = ["default"] }
+iroh-base = "0.96.1"
+iroh-blobs = { version = "0.98.0", features = ["fs-store"] }
+iroh-gossip = "0.96.0"
+iroh-tickets = "0.2.0"
 libc = { version = "0.2.182", optional = true }
-mainline = { version = "6.1.1", features = ["async"] }
+mainline = { version = "6.0.1", features = ["async"] }
 miette = { version = "7.6.0", features = ["fancy"] }
 path-clean = "1.0.1"
 thiserror = "2.0.18"
@@ -71,9 +74,6 @@ tree_magic_mini = { version = "3.2.2", features = ["with-gpl-data"] }
 serde_json = "1.0.149"
 easy_fuser = { version = "0.4.5", features = ["parallel", "deadlock_detection"], optional = true }
 debug-ignore = "1.0.5"
-
-[patch.crates-io]
-iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs", branch = "matheus23/verified-streams" }
 
 [features]
 default = []

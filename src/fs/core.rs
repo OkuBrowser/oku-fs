@@ -2,8 +2,9 @@ use super::*;
 use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
 use bytes::Bytes;
 use iroh::protocol::ProtocolHandler;
-use iroh_blobs::store::Store;
+use iroh_blobs::{store::fs::FsStore, BlobsProtocol};
 use iroh_docs::Author;
+use iroh_gossip::Gossip;
 use log::{error, info};
 #[cfg(feature = "fuse")]
 use miette::IntoDiagnostic;
@@ -23,9 +24,7 @@ impl OkuFs {
         let default_author_id = self.default_author().await;
 
         self.docs
-            .client()
-            .authors()
-            .export(default_author_id)
+            .author_export(default_author_id)
             .await
             .ok()
             .flatten()
@@ -46,31 +45,32 @@ impl OkuFs {
     ///
     /// A running instance of an Oku file system.
     pub async fn start(#[cfg(feature = "fuse")] handle: &Handle) -> anyhow::Result<Self> {
+        let mdns = iroh::address_lookup::mdns::MdnsAddressLookup::builder();
+        let dht_discovery = iroh::address_lookup::DhtAddressLookup::builder();
+
         let endpoint = iroh::Endpoint::builder()
-            .discovery_n0()
-            .discovery_dht()
-            .discovery_local_network()
+            .address_lookup(mdns)
+            .address_lookup(dht_discovery)
             .bind()
             .await?;
-        let blobs = iroh_blobs::net_protocol::Blobs::persistent(NODE_PATH.clone())
-            .await?
-            .build(&endpoint);
-        let gossip = iroh_gossip::net::Gossip::builder()
-            .spawn(endpoint.clone())
-            .await?;
+
+        let store = FsStore::load(NODE_PATH.clone()).await?;
+
+        let blobs = BlobsProtocol::new(&store, None);
+
+        let gossip = Gossip::builder().spawn(endpoint.clone());
         let docs = iroh_docs::protocol::Docs::persistent(NODE_PATH.clone())
-            .spawn(&blobs, &gossip)
+            .spawn(endpoint.clone(), store.into(), gossip.clone())
             .await?;
 
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(iroh_blobs::ALPN, blobs.clone())
             .accept(iroh_gossip::ALPN, gossip.clone())
             .accept(iroh_docs::ALPN, docs.clone())
-            .spawn()
-            .await?;
+            .spawn();
         info!(
             "Default author ID is {} … ",
-            crate::fs::util::fmt_short(docs.client().authors().default().await.unwrap_or_default())
+            crate::fs::util::fmt_short(docs.author_default().await.unwrap_or_default())
         );
 
         let (replica_sender, _replica_receiver) = watch::channel(());
@@ -113,7 +113,7 @@ impl OkuFs {
         let _ = self.router.shutdown().await;
         self.docs.shutdown().await;
         self.blobs.shutdown().await;
-        self.blobs.store().shutdown().await;
+        let _ = self.blobs.store().shutdown().await;
     }
 
     /// Retrieve the content of a document entry.
@@ -139,7 +139,11 @@ impl OkuFs {
     ///
     /// The content of the entry, as raw bytes.
     pub async fn content_bytes_by_hash(&self, hash: &iroh_blobs::Hash) -> anyhow::Result<Bytes> {
-        self.blobs.client().read_to_bytes(*hash).await
+        self.blobs
+            .blobs()
+            .get_bytes(*hash)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Determines the oldest timestamp of a file entry in any replica stored locally.

@@ -1,10 +1,10 @@
 use crate::database::core::DATABASE;
 use crate::{error::OkuDiscoveryError, fs::OkuFs};
-use iroh_base::ticket::Ticket;
 use iroh_blobs::HashAndFormat;
-use iroh_docs::rpc::client::docs::ShareMode;
+use iroh_docs::api::protocol::ShareMode;
 use iroh_docs::sync::CapabilityKind;
 use iroh_docs::NamespaceId;
+use iroh_tickets::Ticket;
 use log::{error, info};
 use miette::IntoDiagnostic;
 use std::{path::PathBuf, time::Duration};

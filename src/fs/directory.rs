@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{future, pin_mut, StreamExt};
 use iroh_blobs::Hash;
-use iroh_docs::rpc::client::docs::Entry;
 use iroh_docs::store::FilterKind;
+use iroh_docs::sync::Entry;
 use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
 use log::error;
@@ -107,7 +107,7 @@ impl OkuFs {
     ) -> miette::Result<usize> {
         let path = normalise_path(path).join(""); // Ensure path ends with a slash
         let file_key = path_to_entry_prefix(&path);
-        let docs_client = &self.docs.client();
+        let docs_client = &self.docs;
         let document = docs_client
             .open(*namespace_id)
             .await

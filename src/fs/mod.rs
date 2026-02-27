@@ -2,7 +2,7 @@
 use debug_ignore::DebugIgnore;
 #[cfg(feature = "fuse")]
 use easy_fuser::templates::DefaultFuseHandler;
-use iroh_blobs::net_protocol::Blobs;
+use iroh_blobs::BlobsProtocol;
 use iroh_docs::protocol::Docs;
 use std::path::PathBuf;
 #[cfg(feature = "fuse")]
@@ -36,8 +36,8 @@ pub(crate) static NODE_PATH: LazyLock<PathBuf> =
 #[derive(Clone, Debug)]
 pub struct OkuFs {
     pub(crate) endpoint: iroh::Endpoint,
-    pub(crate) blobs: Blobs<iroh_blobs::store::fs::Store>,
-    pub(crate) docs: Docs<iroh_blobs::store::fs::Store>,
+    pub(crate) blobs: BlobsProtocol,
+    pub(crate) docs: Docs,
     pub(crate) router: iroh::protocol::Router,
     /// An Iroh node responsible for storing replicas on the local machine, as well as joining swarms to fetch replicas from other nodes.
     /// A watcher for when replicas are created, deleted, or imported.

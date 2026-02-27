@@ -4,7 +4,7 @@ use chrono::TimeZone;
 use easy_fuser::prelude::FileKind::Directory;
 use easy_fuser::prelude::FileKind::RegularFile;
 use easy_fuser::prelude::*;
-use iroh_docs::rpc::client::docs::Entry;
+use iroh_docs::sync::Entry;
 use iroh_docs::NamespaceId;
 use miette::IntoDiagnostic;
 use rayon::iter::IntoParallelRefIterator;
