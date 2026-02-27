@@ -186,4 +186,15 @@ impl OkuFs {
         info!("File at {file_id:?} updated (hash: {file_hash})");
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
+
+    pub(super) fn unlink(&self, parent_id: PathBuf, name: &OsStr) -> miette::Result<()> {
+        let path = parent_id.join(name);
+        let (namespace_id, replica_path) = parse_fuse_path(&path)
+            .map(|x| x.ok_or(miette::miette!("Cannot remove root directory")))??;
+        let entries_deleted = self
+            .handle
+            .block_on(async { self.delete_file(&namespace_id, &replica_path).await })?;
+        info!("File deleted at {path:?} (files deleted: {entries_deleted})");
+        Ok(())
+    }
 }
