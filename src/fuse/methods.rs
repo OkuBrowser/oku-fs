@@ -6,7 +6,6 @@ use log::info;
 use miette::IntoDiagnostic;
 use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::fs::FileType;
 use std::io::BufWriter;
 use std::io::Cursor;
 use std::io::Read;

@@ -453,7 +453,7 @@ impl FuseHandler<PathBuf> for OkuFs {
         })
     }
 
-    fn unlink(&self, req: &RequestInfo, parent_id: PathBuf, name: &OsStr) -> FuseResult<()> {
+    fn unlink(&self, _req: &RequestInfo, parent_id: PathBuf, name: &OsStr) -> FuseResult<()> {
         let parent_id = normalise_path(&parent_id);
         debug!("[unlink] parent_id = {parent_id:?}, name = {name:?}");
         self.unlink(parent_id, name).map_err(|e| {
