@@ -380,6 +380,7 @@ impl FuseHandler<PathBuf> for OkuFs {
         flags: RenameFlags,
     ) -> FuseResult<()> {
         let parent_id = normalise_path(&parent_id);
+        let newparent = normalise_path(&newparent);
         debug!("[rename] parent_id = {parent_id:?}, name = {name:?}, newparent = {newparent:?}, newname = {newname:?}, flags = {flags:?}");
         self.rename(parent_id, name, newparent, newname)
             .map_err(|e| {
@@ -435,25 +436,21 @@ impl FuseHandler<PathBuf> for OkuFs {
 
     fn write(
         &self,
-        req: &RequestInfo,
+        _req: &RequestInfo,
         file_id: PathBuf,
-        file_handle: BorrowedFileHandle,
+        _file_handle: BorrowedFileHandle,
         seek: SeekFrom,
         data: Vec<u8>,
         write_flags: FUSEWriteFlags,
         flags: OpenFlags,
-        lock_owner: Option<u64>,
+        _lock_owner: Option<u64>,
     ) -> FuseResult<u32> {
-        self.get_inner().write(
-            req,
-            file_id,
-            file_handle,
-            seek,
-            data,
-            write_flags,
-            flags,
-            lock_owner,
-        )
+        let file_id = normalise_path(&file_id);
+        debug!("[write] file_id = {file_id:?}, seek = {seek:?}, data = {data:?}, write_flags = {write_flags:?}, flags = {flags:?}");
+        self.write(file_id, seek, data).map_err(|e| {
+            error!("[write]: {e}");
+            PosixError::new(ErrorKind::FileNotFound, e.to_string())
+        })
     }
 
     fn unlink(&self, req: &RequestInfo, parent_id: PathBuf, name: &OsStr) -> FuseResult<()> {

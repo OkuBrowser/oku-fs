@@ -7,8 +7,11 @@ use miette::IntoDiagnostic;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs::FileType;
+use std::io::BufWriter;
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Seek;
+use std::io::Write;
 use std::path::PathBuf;
 
 impl OkuFs {
@@ -156,5 +159,31 @@ impl OkuFs {
                 "File system entry type {path_type:?} at {old_path:?} not supported"
             )),
         }
+    }
+
+    pub(super) fn write(
+        &self,
+        file_id: PathBuf,
+        seek: SeekFrom,
+        data: Vec<u8>,
+    ) -> miette::Result<u32> {
+        let (namespace_id, replica_path) = parse_fuse_path(&file_id).map(|x| {
+            x.ok_or(miette::miette!(
+                "Cannot write bytes to root directory as it's not a file"
+            ))
+        })??;
+        let file_bytes = self
+            .handle
+            .block_on(async { self.read_file(&namespace_id, &replica_path).await })?;
+        let mut writer = BufWriter::new(Cursor::new(file_bytes.to_vec()));
+        writer.seek(seek).into_diagnostic()?;
+        writer.write(&data).into_diagnostic()?;
+        let inner_cursor = writer.into_inner().into_diagnostic()?;
+        let file_hash = self.handle.block_on(async {
+            self.create_or_modify_file(&namespace_id, &replica_path, inner_cursor.into_inner())
+                .await
+        })?;
+        info!("File at {file_id:?} updated (hash: {file_hash})");
+        Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 }
