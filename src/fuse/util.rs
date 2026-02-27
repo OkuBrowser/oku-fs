@@ -42,10 +42,9 @@ pub fn parse_fuse_path(path: &Path) -> miette::Result<Option<(NamespaceId, PathB
     if let Some(_root) = components.next() {
         if let Some(replica_id) = components.next() {
             let replica_id_string = replica_id.as_os_str().to_str().unwrap_or_default();
-            let namespace_id = NamespaceId::from(
-                crate::fs::util::parse_array_hex_or_base32::<32>(replica_id_string)
-                    .unwrap_or_default(),
-            );
+            let namespace_id = NamespaceId::from(crate::fs::util::parse_array_hex_or_base32::<32>(
+                replica_id_string,
+            )?);
             let replica_path = PathBuf::from("/").join(components.as_path()).to_path_buf();
             return Ok(Some((namespace_id, replica_path)));
         } else {
