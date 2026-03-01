@@ -39,13 +39,55 @@ impl OkuFs {
         Ok(document_id)
     }
 
+    /// Returns whether a replica is a home replica.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace_id` - The ID of the replica.
+    ///
+    /// # Returns
+    ///
+    /// If the given replica is a home replica.
+    pub async fn is_home_replica(&self, namespace_id: &NamespaceId) -> bool {
+        let replica_capability = self.get_replica_capability(namespace_id).await;
+        match replica_capability {
+            Err(e) => {
+                error!("{e}");
+                false
+            }
+            Ok(CapabilityKind::Read) => false,
+            Ok(CapabilityKind::Write) => {
+                let authors_list = self.docs.author_list().await;
+                match authors_list {
+                    Err(e) => {
+                        error!("{e}");
+                        false
+                    }
+                    Ok(authors_list) => {
+                        let authors: HashSet<AuthorId> = authors_list
+                            .filter_map(|x| async move { x.ok() })
+                            .collect()
+                            .await;
+                        authors.contains(&AuthorId::from(namespace_id.as_bytes()))
+                    }
+                }
+            }
+        }
+    }
+
     /// Deletes a replica from the file system.
     ///
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to delete.
     pub async fn delete_replica(&self, namespace_id: &NamespaceId) -> miette::Result<()> {
-        let docs_client = &self.docs;
+        let docs_client: &Docs = &self.docs;
+        if self.is_home_replica(namespace_id).await {
+            return Err(miette::miette!(
+                "Cannot delete a home replica (replica ID: {})",
+                crate::fs::util::fmt(namespace_id)
+            ));
+        }
         self.replica_sender.send_replace(());
         Ok(docs_client.drop_doc(*namespace_id).await.map_err(|e| {
             error!("{}", e);
