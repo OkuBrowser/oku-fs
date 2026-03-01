@@ -24,3 +24,4 @@ pub use iroh_base;
 pub use iroh_blobs;
 pub use iroh_docs;
 pub use iroh_gossip;
+pub use iroh_tickets;
