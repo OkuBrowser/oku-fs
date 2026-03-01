@@ -8,6 +8,7 @@ use iroh_docs::NamespaceId;
 use iroh_tickets::Ticket;
 use log::{info, LevelFilter};
 use miette::{miette, IntoDiagnostic};
+use oku_fs::config::OkuFsConfig;
 use oku_fs::database::core::OkuDatabase;
 use oku_fs::fs::OkuFs;
 use rayon::iter::FromParallelIterator;
@@ -18,6 +19,7 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 #[cfg(feature = "fuse")]
 use tokio::runtime::Handle;
 use url::Url;
@@ -105,12 +107,6 @@ enum NetCommands {
         #[arg(value_name = "PATH")]
         /// Path to export a user to.
         path: PathBuf,
-    },
-    /// Sets the current user's home replica.
-    SetHome {
-        #[arg(value_parser = parse_namespace_id, value_name = "REPLICA_ID")]
-        /// The ID of the new home replica; if unspecified, no home replica is set.
-        replica_id: Option<NamespaceId>,
     },
     /// Sets the current user's display name.
     SetName {
@@ -328,6 +324,18 @@ enum FsCommands {
         /// The path of the directory to mount the filesystem in.
         path: PathBuf,
     },
+    /// Sets the delay between republishing content to the Mainline DHT.
+    SetRepublishDelay {
+        #[arg(value_parser = humantime::parse_duration, value_name = "REPUBLISH_DELAY")]
+        /// The delay between republishing content to the Mainline DHT; if unspecified, defaults to one hour.
+        republish_delay: Option<Duration>,
+    },
+    /// Sets the initial delay before publishing content to the Mainline DHT.
+    SetInitialPublishDelay {
+        #[arg(value_parser = humantime::parse_duration, value_name = "INITIAL_PUBLISH_DELAY")]
+        /// The initial delay before publishing content to the Mainline DHT; if unspecified, defaults to half a second.
+        initial_publish_delay: Option<Duration>,
+    },
 }
 
 fn parse_namespace_id(value: &str) -> miette::Result<NamespaceId> {
@@ -481,10 +489,34 @@ pub async fn main() -> miette::Result<()> {
             }
             #[cfg(feature = "fuse")]
             FsCommands::Mount { path } => {
-                info!("Node will listen for incoming connections.");
+                let default_author_id = node.default_author().await;
+                info!(
+                    "Node will listen for incoming connections (default author ID: {}).",
+                    oku_fs::fs::util::fmt(default_author_id)
+                );
                 let mount_handle = node.mount(path)?;
                 tokio::signal::ctrl_c().await.into_diagnostic()?;
                 mount_handle.join();
+            }
+            FsCommands::SetRepublishDelay { republish_delay } => {
+                let config = OkuFsConfig::load_or_create_config()?;
+                config.set_republish_delay(&republish_delay)?;
+                config.save()?;
+                info!(
+                    "Set republish delay to {}.",
+                    humantime::format_duration(config.get_republish_delay())
+                );
+            }
+            FsCommands::SetInitialPublishDelay {
+                initial_publish_delay,
+            } => {
+                let config = OkuFsConfig::load_or_create_config()?;
+                config.set_initial_publish_delay(&initial_publish_delay)?;
+                config.save()?;
+                info!(
+                    "Set initial publish delay to {}.",
+                    humantime::format_duration(config.get_initial_publish_delay())
+                );
             }
         },
         Some(Commands::Net(Net {
@@ -522,13 +554,6 @@ pub async fn main() -> miette::Result<()> {
                 for post in posts {
                     println!("⮞ {}", util::post(&post).await);
                 }
-            }
-            NetCommands::SetHome { replica_id } => {
-                node.set_home_replica(&replica_id)?;
-                println!(
-                    "Home replica set to {:?} … ",
-                    replica_id.map(oku_fs::fs::util::fmt)
-                );
             }
             NetCommands::SetName { display_name } => {
                 node.set_display_name(&display_name).await?;
@@ -652,7 +677,11 @@ pub async fn main() -> miette::Result<()> {
             },
         },
         None => {
-            info!("Node will listen for incoming connections.");
+            let default_author_id = node.default_author().await;
+            info!(
+                "Node will listen for incoming connections (default author ID: {}).",
+                oku_fs::fs::util::fmt(default_author_id)
+            );
             tokio::signal::ctrl_c().await.into_diagnostic()?;
             node.shutdown().await;
         }

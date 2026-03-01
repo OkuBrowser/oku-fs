@@ -45,7 +45,7 @@ impl OkuFs {
         match parsed_path {
             None => {
                 let replicas = self.handle.block_on(async { self.list_replicas().await })?;
-                for (replica, _capability_kind) in replicas {
+                for (replica, _capability_kind, _is_home_replica) in replicas {
                     directory_entries.push((crate::fs::util::fmt(replica).into(), Directory));
                 }
                 Ok(directory_entries)

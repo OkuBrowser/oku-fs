@@ -1,71 +1,28 @@
 use crate::database::core::DATABASE;
+use crate::database::dht::ReplicaAnnouncement;
 use crate::{error::OkuDiscoveryError, fs::OkuFs};
 use iroh_blobs::HashAndFormat;
 use iroh_docs::api::protocol::ShareMode;
-use iroh_docs::sync::CapabilityKind;
 use iroh_docs::NamespaceId;
 use iroh_tickets::Ticket;
-use log::{error, info};
+use log::{debug, error, info};
 use miette::IntoDiagnostic;
 use std::{path::PathBuf, time::Duration};
 use tokio::task::JoinSet;
 
 /// The delay between republishing content to the Mainline DHT.
-pub const REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);
+pub const DEFAULT_REPUBLISH_DELAY: Duration = Duration::from_secs(60 * 60);
 
 /// The initial delay before publishing content to the Mainline DHT.
-pub const INITIAL_PUBLISH_DELAY: Duration = Duration::from_millis(500);
+pub const DEFAULT_INITIAL_PUBLISH_DELAY: Duration = Duration::from_millis(500);
 
 impl OkuFs {
-    /// Announces a writable replica to the Mainline DHT.
+    /// Announces a replica to the Mainline DHT.
     ///
     /// # Arguments
     ///
     /// * `namespace_id` - The ID of the replica to announce.
-    pub async fn announce_mutable_replica(
-        &self,
-        namespace_id: &NamespaceId,
-    ) -> miette::Result<NamespaceId> {
-        let ticket = self
-            .create_document_ticket(namespace_id, &ShareMode::Read)
-            .await?
-            .to_bytes();
-        let newest_timestamp = self
-            .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
-            .await? as i64;
-        let replica_private_key = mainline::SigningKey::from_bytes(
-            &self
-                .create_document_ticket(namespace_id, &ShareMode::Write)
-                .await?
-                .capability
-                .secret_key()
-                .into_diagnostic()?
-                .to_bytes(),
-        );
-        let mutable_item =
-            mainline::MutableItem::new(replica_private_key, &ticket, newest_timestamp, None);
-        match self.dht.put_mutable(mutable_item, None).await {
-            Ok(_) => info!(
-                "Announced mutable replica {} … ",
-                crate::fs::util::fmt(namespace_id)
-            ),
-            Err(e) => error!(
-                "{}",
-                OkuDiscoveryError::ProblemAnnouncingContent(
-                    crate::fs::util::fmt(namespace_id),
-                    e.to_string()
-                )
-            ),
-        }
-        Ok(*namespace_id)
-    }
-
-    /// Announces a read-only replica to the Mainline DHT.
-    ///
-    /// # Arguments
-    ///
-    /// * `namespace_id` - The ID of the replica to announce.
-    pub async fn announce_immutable_replica(
+    pub async fn announce_replica(
         &self,
         namespace_id: &NamespaceId,
     ) -> miette::Result<NamespaceId> {
@@ -74,14 +31,7 @@ impl OkuFs {
             .map_err(|e| miette::miette!("{}", e))?
             .as_bytes()
             .to_vec();
-        let announcement = DATABASE
-            .get_announcement(&public_key_bytes)
-            .ok()
-            .flatten()
-            .ok_or(miette::miette!(
-                "Prior announcement not found in database for replica {} … ",
-                crate::fs::util::fmt(namespace_id)
-            ))?;
+        let existing_announcement = DATABASE.get_announcement(&public_key_bytes).ok().flatten();
 
         let ticket = self
             .create_document_ticket(namespace_id, &ShareMode::Read)
@@ -90,22 +40,52 @@ impl OkuFs {
         let newest_timestamp = self
             .get_newest_timestamp_in_folder(namespace_id, &PathBuf::from("/"))
             .await? as i64;
-        let mutable_item = mainline::MutableItem::new_signed_unchecked(
-            announcement.key.try_into().map_err(|_e| {
-                miette::miette!("Replica announcement key does not fit into 32 bytes … ")
-            })?,
-            announcement.signature.try_into().map_err(|_e| {
-                miette::miette!("Replica announcement signature does not fit into 64 bytes … ")
-            })?,
-            &ticket,
-            newest_timestamp,
-            None,
-        );
-        match self.dht.put_mutable(mutable_item, None).await {
-            Ok(_) => info!(
-                "Announced immutable replica {} … ",
-                crate::fs::util::fmt(namespace_id)
+
+        // Ideally, we can repeat an announcement we've already heard for this replica
+        let mutable_item = match existing_announcement {
+            None => {
+                debug!(
+                    "Prior announcement not found in database for replica {} … ",
+                    crate::fs::util::fmt(namespace_id)
+                );
+                // Even if we don't have someone else's announcement saved, we can create our own if we have write access to the replica
+                let replica_private_key = mainline::SigningKey::from_bytes(
+                    &self
+                        .create_document_ticket(namespace_id, &ShareMode::Write)
+                        .await?
+                        .capability
+                        .secret_key()
+                        .into_diagnostic()?
+                        .to_bytes(),
+                );
+                mainline::MutableItem::new(replica_private_key, &ticket, newest_timestamp, None)
+            }
+            Some(announcement) => mainline::MutableItem::new_signed_unchecked(
+                announcement.key.try_into().map_err(|_e| {
+                    miette::miette!("Replica announcement key does not fit into 32 bytes … ")
+                })?,
+                announcement.signature.try_into().map_err(|_e| {
+                    miette::miette!("Replica announcement signature does not fit into 64 bytes … ")
+                })?,
+                &ticket,
+                newest_timestamp,
+                None,
             ),
+        };
+        let replica_announcement = ReplicaAnnouncement {
+            key: mutable_item.key().to_vec(),
+            signature: mutable_item.signature().to_vec(),
+        };
+        match self.dht.put_mutable(mutable_item, None).await {
+            Ok(_) => {
+                info!(
+                    "Announced replica {} … ",
+                    crate::fs::util::fmt(namespace_id)
+                );
+                if let Err(e) = DATABASE.upsert_announcement(&replica_announcement) {
+                    error!("{e}");
+                }
+            }
             Err(e) => error!(
                 "{}",
                 OkuDiscoveryError::ProblemAnnouncingContent(
@@ -117,79 +97,15 @@ impl OkuFs {
         Ok(*namespace_id)
     }
 
-    /// Announces a replica to the Mainline DHT.
-    ///
-    /// # Arguments
-    ///
-    /// * `namespace_id` - The ID of the replica to announce.
-    ///
-    /// * `capability_kind` - Whether the replica is writable by the current node or read-only.
-    pub async fn announce_replica(
-        &self,
-        namespace_id: &NamespaceId,
-        capability_kind: &CapabilityKind,
-    ) -> miette::Result<NamespaceId> {
-        match capability_kind {
-            CapabilityKind::Read => self.announce_immutable_replica(namespace_id).await,
-            CapabilityKind::Write => self.announce_mutable_replica(namespace_id).await,
-        }
-    }
-
-    /// Announce the home replica
-    pub async fn announce_home_replica(&self) -> miette::Result<NamespaceId> {
-        let home_replica = self
-            .home_replica()
-            .await
-            .ok_or(miette::miette!("No home replica set … "))?;
-        let ticket = self
-            .create_document_ticket(&home_replica, &ShareMode::Read)
-            .await?
-            .to_bytes();
-        let newest_timestamp = self
-            .get_newest_timestamp_in_folder(&home_replica, &PathBuf::from("/"))
-            .await? as i64;
-        let author_private_key = mainline::SigningKey::from_bytes(
-            &self
-                .get_author()
-                .await
-                .map_err(|e| miette::miette!("{}", e))?
-                .to_bytes(),
-        );
-        let mutable_item =
-            mainline::MutableItem::new(author_private_key, &ticket, newest_timestamp, None);
-        match self.dht.put_mutable(mutable_item, None).await {
-            Ok(_) => info!(
-                "Announced home replica {} … ",
-                crate::fs::util::fmt(home_replica)
-            ),
-            Err(e) => error!(
-                "{}",
-                OkuDiscoveryError::ProblemAnnouncingContent(
-                    crate::fs::util::fmt(home_replica),
-                    e.to_string()
-                )
-            ),
-        }
-        Ok(home_replica)
-    }
-
-    /// Announces all writable replicas to the Mainline DHT.
+    /// Announces read-only tickets for all known replicas to the Mainline DHT.
     pub async fn announce_replicas(&self) -> miette::Result<()> {
         let mut future_set = JoinSet::new();
 
-        // Prepare to announce home replica
-        let self_clone = self.clone();
-        future_set.spawn(async move { self_clone.announce_home_replica().await });
-
         // Prepare to announce all replicas
         let replicas = self.list_replicas().await?;
-        for (replica, capability_kind) in replicas {
+        for (replica, _capability_kind, _is_home_replica) in replicas {
             let self_clone = self.clone();
-            future_set.spawn(async move {
-                self_clone
-                    .announce_replica(&replica, &capability_kind)
-                    .await
-            });
+            future_set.spawn(async move { self_clone.announce_replica(&replica).await });
         }
         info!("Pending announcements: {} … ", future_set.len());
         // Execute announcements in parallel

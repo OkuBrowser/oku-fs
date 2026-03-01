@@ -17,7 +17,7 @@ impl FuseHandler<PathBuf> for OkuFs {
     fn destroy(&self) {
         self.handle
             .block_on(async move { self.clone().shutdown().await });
-        info!("Node unmounting and shutting down … ");
+        info!("Node unmounting … ");
     }
 
     fn flush(

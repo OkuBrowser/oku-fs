@@ -1,5 +1,4 @@
 use super::*;
-use crate::config::OkuFsConfig;
 use crate::database::core::DATABASE;
 use crate::database::dht::ReplicaAnnouncement;
 use crate::error::{OkuDiscoveryError, OkuFsError, OkuFuseError};
@@ -10,11 +9,12 @@ use iroh_docs::api::protocol::ShareMode;
 use iroh_docs::engine::LiveEvent;
 use iroh_docs::store::FilterKind;
 use iroh_docs::sync::CapabilityKind;
-use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
+use iroh_docs::{AuthorId, DocTicket};
 use iroh_tickets::Ticket;
 use log::{error, info};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use util::{merge_tickets, path_to_entry_prefix};
 
@@ -57,32 +57,43 @@ impl OkuFs {
     ///
     /// # Returns
     ///
-    /// A list of all replicas in the file system.
-    pub async fn list_replicas(&self) -> miette::Result<Vec<(NamespaceId, CapabilityKind)>> {
+    /// A list of all replicas in the file system, including their ID, capability kind (read or write), and if it's a home replica.
+    pub async fn list_replicas(&self) -> miette::Result<Vec<(NamespaceId, CapabilityKind, bool)>> {
         let docs_client = &self.docs;
+
+        let authors: HashSet<AuthorId> = docs_client
+            .author_list()
+            .await
+            .map_err(|e| miette::miette!(e))?
+            .filter_map(|x| async move { x.ok() })
+            .collect()
+            .await;
+
         let replicas = docs_client.list().await.map_err(|e| {
             error!("{}", e);
             OkuFsError::CannotListReplicas
         })?;
         pin_mut!(replicas);
-        let mut replica_ids: Vec<(NamespaceId, CapabilityKind)> = replicas
-            .filter_map(|replica| async move { replica.ok() })
+        let mut replica_ids: Vec<(NamespaceId, CapabilityKind, bool)> = replicas
+            .filter_map(|replica| async {
+                replica.ok().map(|(x, y)| {
+                    (
+                        x,
+                        y,
+                        (&authors).contains(&AuthorId::from(x.as_bytes()))
+                            && matches!(y, CapabilityKind::Write),
+                    )
+                })
+            })
             .collect()
             .await;
 
-        let config = OkuFsConfig::load_or_create_config()?;
-        if let Some(home_replica) = config.home_replica()? {
-            replica_ids.sort_unstable_by_key(|(namespace_id, capability_kind)| {
-                (
-                    *namespace_id != home_replica,
-                    !matches!(capability_kind, CapabilityKind::Write),
-                )
-            });
-        } else {
-            replica_ids.sort_unstable_by_key(|(_namespace_id, capability_kind)| {
-                !matches!(capability_kind, CapabilityKind::Write)
-            });
-        }
+        replica_ids.sort_unstable_by_key(|(_namespace_id, capability_kind, is_home_replica)| {
+            (
+                !is_home_replica,
+                !matches!(capability_kind, CapabilityKind::Write),
+            )
+        });
         Ok(replica_ids)
     }
 
@@ -313,11 +324,19 @@ impl OkuFs {
         tokio::pin!(get_stream);
         let mut tickets = Vec::new();
         while let Some(mutable_item) = get_stream.next().await {
-            let _ = DATABASE.upsert_announcement(&ReplicaAnnouncement {
+            let ticket = DocTicket::from_bytes(mutable_item.value())?;
+            let ticket_namespace_id = &ticket.capability.id();
+            if ticket_namespace_id != namespace_id {
+                error!("Ticket is for replica with ID {}, but claims to be for replica with ID {}; ignoring ticket … ", crate::fs::util::fmt(ticket_namespace_id), crate::fs::util::fmt(namespace_id));
+                continue;
+            }
+            if let Err(e) = DATABASE.upsert_announcement(&ReplicaAnnouncement {
                 key: mutable_item.key().to_vec(),
                 signature: mutable_item.signature().to_vec(),
-            });
-            tickets.push(DocTicket::from_bytes(mutable_item.value())?)
+            }) {
+                error!("{e}");
+            }
+            tickets.push(ticket)
         }
         merge_tickets(&tickets).ok_or(anyhow!(
             "Could not find tickets for {} … ",

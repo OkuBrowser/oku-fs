@@ -1,5 +1,5 @@
 use super::*;
-use crate::discovery::{INITIAL_PUBLISH_DELAY, REPUBLISH_DELAY};
+use crate::config::OkuFsConfig;
 use bytes::Bytes;
 use iroh::protocol::ProtocolHandler;
 use iroh_blobs::{store::fs::FsStore, BlobsProtocol};
@@ -90,9 +90,13 @@ impl OkuFs {
             dht: mainline::Dht::server()?.as_async(),
         };
         let oku_fs_clone = oku_fs.clone();
+        let config = OkuFsConfig::load_or_create_config().unwrap_or_default();
+        let republish_delay = config.get_republish_delay();
+        let initial_publish_delay = config.get_initial_publish_delay();
+
         tokio::spawn(async move {
+            tokio::time::sleep(initial_publish_delay).await;
             loop {
-                tokio::time::sleep(INITIAL_PUBLISH_DELAY).await;
                 match oku_fs_clone.announce_replicas().await {
                     Ok(_) => info!("Announced all replicas … "),
                     Err(e) => error!("{}", e),
@@ -101,7 +105,7 @@ impl OkuFs {
                     Ok(_) => info!("Refreshed OkuNet database … "),
                     Err(e) => error!("{}", e),
                 }
-                tokio::time::sleep(REPUBLISH_DELAY - INITIAL_PUBLISH_DELAY).await;
+                tokio::time::sleep(republish_delay).await;
             }
         });
         Ok(oku_fs.clone())
@@ -109,11 +113,16 @@ impl OkuFs {
 
     /// Shuts down the Oku file system.
     pub async fn shutdown(self) {
-        let _ = self.endpoint.close().await;
-        let _ = self.router.shutdown().await;
+        info!("Node shutting down … ");
+        self.endpoint.close().await;
+        if let Err(e) = self.router.shutdown().await {
+            error!("{e}");
+        }
         self.docs.shutdown().await;
         self.blobs.shutdown().await;
-        let _ = self.blobs.store().shutdown().await;
+        if let Err(e) = self.blobs.store().shutdown().await {
+            error!("{e}");
+        }
     }
 
     /// Retrieve the content of a document entry.
@@ -154,7 +163,7 @@ impl OkuFs {
     pub async fn get_oldest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
-        for (replica, _capability_kind) in replicas {
+        for (replica, _capability_kind, _is_home_replica) in replicas {
             timestamps.push(
                 self.get_oldest_timestamp_in_folder(&replica, &PathBuf::from("/"))
                     .await?,
@@ -171,7 +180,7 @@ impl OkuFs {
     pub async fn get_newest_timestamp(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut timestamps: Vec<u64> = Vec::new();
-        for (replica, _capability_kind) in replicas {
+        for (replica, _capability_kind, _is_home_replica) in replicas {
             timestamps.push(
                 self.get_newest_timestamp_in_folder(&replica, &PathBuf::from("/"))
                     .await?,
@@ -188,7 +197,7 @@ impl OkuFs {
     pub async fn get_size(&self) -> miette::Result<u64> {
         let replicas = self.list_replicas().await?;
         let mut size = 0;
-        for (replica, _capability_kind) in replicas {
+        for (replica, _capability_kind, _is_home_replica) in replicas {
             size += self.get_folder_size(&replica, &PathBuf::from("/")).await?;
         }
         Ok(size)

@@ -6,6 +6,7 @@ use super::core::POST_INDEX_WRITER;
 use super::core::POST_SCHEMA;
 use crate::fs::util::path_to_entry_key;
 use iroh_docs::AuthorId;
+use log::error;
 use miette::IntoDiagnostic;
 use native_db::*;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -111,7 +112,9 @@ impl OkuDatabase {
             }
         });
         posts.par_iter().for_each(|post| {
-            let _ = index_writer.add_document(post.clone().into());
+            if let Err(e) = index_writer.add_document(post.clone().into()) {
+                error!("{e}");
+            }
         });
         index_writer.commit().into_diagnostic()?;
 

@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use iroh_docs::DocTicket;
+use log::error;
 use miette::IntoDiagnostic;
 use path_clean::PathClean;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -157,7 +158,9 @@ pub fn merge_tickets(tickets: &Vec<DocTicket>) -> Option<DocTicket> {
     ticket_parts
         .into_iter()
         .reduce(|mut merged_tickets, next_ticket| {
-            let _ = merged_tickets.0.merge(next_ticket.0);
+            if let Err(e) = merged_tickets.0.merge(next_ticket.0) {
+                error!("{e}");
+            }
             merged_tickets.1.extend_from_slice(&next_ticket.1);
             merged_tickets
         })

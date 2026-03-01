@@ -323,7 +323,7 @@ impl OkuFs {
                 let total_files = {
                     let mut file_count = 0u64;
                     if let Ok(replicas) = self.list_replicas().await {
-                        for (replica, _capability_kind) in replicas {
+                        for (replica, _capability_kind, _is_home_replica) in replicas {
                             if let Ok(files) = self.list_files(&replica, &None).await {
                                 file_count += files.len().try_into().unwrap_or(0);
                             }

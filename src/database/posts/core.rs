@@ -3,6 +3,7 @@ use super::super::users::*;
 use crate::fs::FS_PATH;
 use iroh_docs::sync::Entry;
 use iroh_docs::AuthorId;
+use log::error;
 use native_db::*;
 use native_model::{native_model, Model};
 use serde::{Deserialize, Serialize};
@@ -49,7 +50,9 @@ pub(crate) static POST_SCHEMA: LazyLock<(Schema, HashMap<&str, Field>)> = LazyLo
     (schema, fields)
 });
 pub(crate) static POST_INDEX: LazyLock<Index> = LazyLock::new(|| {
-    let _ = std::fs::create_dir_all(&*POST_INDEX_PATH);
+    if let Err(e) = std::fs::create_dir_all(&*POST_INDEX_PATH) {
+        error!("{e}");
+    }
     let mmap_directory: Box<dyn Directory> =
         Box::new(MmapDirectory::open(&*POST_INDEX_PATH).unwrap());
     Index::open_or_create(mmap_directory, POST_SCHEMA.0.clone()).unwrap()

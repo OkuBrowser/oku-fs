@@ -4,7 +4,7 @@
 #![warn(missing_docs)]
 
 /// Configuration of an Oku file system node.
-pub(crate) mod config;
+pub mod config;
 /// Database used by the Oku file system.
 pub mod database;
 /// Content discovery and retrieval.

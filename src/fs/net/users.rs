@@ -3,22 +3,19 @@ use crate::{
     config::OkuFsConfig,
     database::{
         core::DATABASE,
-        dht::ReplicaAnnouncement,
         posts::core::{OkuNote, OkuPost},
         users::{OkuIdentity, OkuUser},
     },
-    discovery::REPUBLISH_DELAY,
-    fs::{util::merge_tickets, OkuFs},
+    fs::OkuFs,
 };
-use anyhow::anyhow;
 use futures::StreamExt;
 use iroh_blobs::Hash;
-use iroh_docs::api::protocol::ShareMode;
 use iroh_docs::sync::CapabilityKind;
 use iroh_docs::AuthorId;
 use iroh_docs::DocTicket;
 use iroh_docs::NamespaceId;
-use iroh_tickets::Ticket;
+use iroh_docs::{api::protocol::ShareMode, Author, NamespaceSecret};
+use log::debug;
 use miette::IntoDiagnostic;
 use rayon::iter::{
     FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
@@ -91,7 +88,7 @@ impl OkuFs {
                 .map_err(|e| miette::miette!("{}", e))?,
             _ => (),
         }
-        self.set_home_replica(&exported_user.home_replica)
+        Ok(())
     }
 
     /// Exports the local Oku user's credentials in TOML format.
@@ -119,32 +116,73 @@ impl OkuFs {
         self.import_user(&exported_user).await
     }
 
-    /// Retrieve the home replica of the Oku user.
-    ///
-    /// # Returns
-    ///
-    /// The home replica of the Oku user.
-    pub async fn home_replica(&self) -> Option<NamespaceId> {
-        let config = OkuFsConfig::load_or_create_config().ok()?;
-        let home_replica = config.home_replica().ok().flatten()?;
-        let home_replica_capability = self.get_replica_capability(&home_replica).await.ok()?;
-        match home_replica_capability {
-            CapabilityKind::Write => Some(home_replica),
-            CapabilityKind::Read => None,
-        }
-    }
-
-    /// Set the home replica of the Oku user.
+    /// Creates the home replica of a known author.
     ///
     /// # Arguments
     ///
-    /// * `home_replica` - The ID of the intended new home replica.
-    pub fn set_home_replica(&self, home_replica: &Option<NamespaceId>) -> miette::Result<()> {
-        let config = OkuFsConfig::load_or_create_config()?;
-        config.set_home_replica(home_replica)?;
-        config.save()?;
+    /// * `author` - An optional author keypair to create the home replica for. If not provided, a home replica for the default author is created. The author keypair must be one already imported.
+    ///
+    /// # Returns
+    ///
+    /// The replica ID of the created home replica.
+    pub async fn create_home_replica(
+        &self,
+        author: &Option<Author>,
+    ) -> miette::Result<NamespaceId> {
+        let given_author_id = author.as_ref().map(|x| x.id());
+        if let Some(given_author_id) = given_author_id.as_ref() {
+            let is_known_author_id = self
+                .docs
+                .author_list()
+                .await
+                .map_err(|e| miette::miette!(e))?
+                .any(|x| async move { x.map_or(false, |x| x == *given_author_id) })
+                .await;
+            if !is_known_author_id {
+                return Err(miette::miette!("Cannot create home replica for authors whose private key is unknown (author ID: {})", crate::fs::util::fmt_short(given_author_id)));
+            }
+        }
+
+        let default_author = self.get_author().await.map_err(|e| miette::miette!(e))?;
+        let author = author.as_ref().unwrap_or(&default_author);
+        debug!(
+            "Attempting to create home replica for author with ID {} … ",
+            crate::fs::util::fmt_short(author.id())
+        );
+        let home_replica = self
+            .docs
+            .import_namespace(iroh_docs::Capability::Write(NamespaceSecret::from_bytes(
+                &author.to_bytes(),
+            )))
+            .await
+            .map_err(|e| miette::miette!(e))?;
         self.replica_sender.send_replace(());
-        Ok(())
+        debug!(
+            "Created home replica for author with ID {} … ",
+            crate::fs::util::fmt_short(author.id())
+        );
+        Ok(home_replica.id())
+    }
+
+    /// Retrieve the home replica of the Oku user, creating it if it does not yet exist.
+    ///
+    /// # Returns
+    ///
+    /// The home replica of the Oku user, if it already existed or was able to be created successfully.
+    pub async fn home_replica(&self) -> Option<NamespaceId> {
+        let home_replica = NamespaceId::from(self.default_author().await.as_bytes());
+        let home_replica_capability = self.get_replica_capability(&home_replica).await.ok();
+        let home_replica_exists = match home_replica_capability {
+            Some(CapabilityKind::Write) => Some(home_replica),
+            Some(CapabilityKind::Read) => None,
+            None => None,
+        };
+        if let None = home_replica_exists {
+            debug!("Home replica does not exist; creating … ");
+            self.create_home_replica(&None).await.ok()
+        } else {
+            home_replica_exists
+        }
     }
 
     /// Retrieves the OkuNet identity of the local user.
@@ -381,7 +419,7 @@ impl OkuFs {
         })
     }
 
-    /// Refreshes any user data last retrieved longer than [`REPUBLISH_DELAY`] ago according to the system time; the users one is following, and the users they're following, are recorded locally.
+    /// Refreshes any user data last retrieved longer than [`crate::config::OkuFsConfig::get_republish_delay`] ago according to the system time; the users one is following, and the users they're following, are recorded locally.
     /// Blocked users are not recorded.
     pub async fn refresh_users(&self) -> miette::Result<()> {
         // Wanted users: followed users
@@ -460,21 +498,11 @@ impl OkuFs {
     /// A ticket for the home replica of the user with the given content authorship ID.
     pub async fn resolve_author_id(&self, author_id: &AuthorId) -> anyhow::Result<DocTicket> {
         self.okunet_fetch_sender.send_replace(true);
-        let get_stream = self.dht.get_mutable(author_id.as_bytes(), None, None);
-        tokio::pin!(get_stream);
-        let mut tickets = Vec::new();
-        while let Some(mutable_item) = get_stream.next().await {
-            let _ = DATABASE.upsert_announcement(&ReplicaAnnouncement {
-                key: mutable_item.key().to_vec(),
-                signature: mutable_item.signature().to_vec(),
-            });
-            tickets.push(DocTicket::from_bytes(mutable_item.value())?)
-        }
+        let ticket = self
+            .resolve_namespace_id(&NamespaceId::from(author_id.as_bytes()))
+            .await;
         self.okunet_fetch_sender.send_replace(false);
-        merge_tickets(&tickets).ok_or(anyhow!(
-            "Could not find tickets for {} … ",
-            crate::fs::util::fmt(author_id)
-        ))
+        ticket
     }
 
     /// Join a swarm to fetch the latest version of a home replica and obtain the OkuNet identity within it.
@@ -538,7 +566,7 @@ impl OkuFs {
 
     /// Obtain an OkuNet user's content, identified by their content authorship ID.
     ///
-    /// If last retrieved longer than [`REPUBLISH_DELAY`] ago according to the system time, a known user's content will be re-fetched.
+    /// If last retrieved longer than [`crate::config::OkuFsConfig::get_republish_delay`] ago according to the system time, a known user's content will be re-fetched.
     ///
     /// # Arguments
     ///
@@ -548,12 +576,14 @@ impl OkuFs {
     ///
     /// An OkuNet user's content.
     pub async fn get_or_fetch_user(&self, author_id: &AuthorId) -> miette::Result<OkuUser> {
+        let config = OkuFsConfig::load_or_create_config().unwrap_or_default();
+        let republish_delay = config.get_republish_delay();
         match DATABASE.get_user(author_id).ok().flatten() {
             Some(user) => {
                 match SystemTime::now()
                     .duration_since(user.last_fetched)
                     .into_diagnostic()?
-                    > REPUBLISH_DELAY
+                    > republish_delay
                 {
                     true => self.fetch_user(author_id).await,
                     false => Ok(user),
